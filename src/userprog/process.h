@@ -31,7 +31,7 @@ struct process {
 
 void userprog_init(void);
 
-pid_t process_execute(const char* file_name);
+pid_t process_execute(const char* argv);
 int process_wait(pid_t);
 void process_exit(void);
 void process_activate(void);

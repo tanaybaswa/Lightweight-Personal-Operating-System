@@ -22,7 +22,8 @@
 
 static struct semaphore temporary;
 static thread_func start_process NO_RETURN;
-static bool load(const char* file_name, void (**eip)(void), void** esp);
+static bool load(char* argv, void (**eip)(void), void** esp);
+static int count_words(char* argv);
 
 /* Initializes user programs in the system by ensuring the main
    thread has a minimal PCB so that it can execute and wait for
@@ -48,29 +49,29 @@ void userprog_init(void) {
    FILENAME.  The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
    process id, or TID_ERROR if the thread cannot be created. */
-pid_t process_execute(const char* file_name) {
-  char* fn_copy;
+pid_t process_execute(const char* argv) {
+  char* argv_copy;
   tid_t tid;
 
   sema_init(&temporary, 0);
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
-  fn_copy = palloc_get_page(0);
-  if (fn_copy == NULL)
+  argv_copy = palloc_get_page(0);
+  if (argv_copy == NULL)
     return TID_ERROR;
-  strlcpy(fn_copy, file_name, PGSIZE);
+  strlcpy(argv_copy, argv, PGSIZE);
 
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create(file_name, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create(argv_copy, PRI_DEFAULT, start_process, argv_copy);
   if (tid == TID_ERROR)
-    palloc_free_page(fn_copy);
+    palloc_free_page(argv_copy);
   return tid;
 }
 
 /* A thread function that loads a user process and starts it
    running. */
-static void start_process(void* file_name_) {
-  char* file_name = (char*)file_name_;
+static void start_process(void* argv_) {
+  char* argv = (char*)argv_;
   struct thread* t = thread_current();
   struct intr_frame if_;
   bool success, pcb_success;
@@ -97,7 +98,7 @@ static void start_process(void* file_name_) {
     if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
     if_.cs = SEL_UCSEG;
     if_.eflags = FLAG_IF | FLAG_MBS;
-    success = load(file_name, &if_.eip, &if_.esp);
+    success = load(argv, &if_.eip, &if_.esp);
   }
 
   /* Handle failure with succesful PCB malloc. Must free the PCB */
@@ -111,7 +112,7 @@ static void start_process(void* file_name_) {
   }
 
   /* Clean up. Exit on failure or jump to userspace */
-  palloc_free_page(file_name);
+  palloc_free_page(argv);
   if (!success) {
     sema_up(&temporary);
     thread_exit();
@@ -257,7 +258,7 @@ struct Elf32_Phdr {
 #define PF_W 2 /* Writable. */
 #define PF_R 4 /* Readable. */
 
-static bool setup_stack(void** esp);
+static bool setup_stack(void** esp, char* argv);
 static bool validate_segment(const struct Elf32_Phdr*, struct file*);
 static bool load_segment(struct file* file, off_t ofs, uint8_t* upage, uint32_t read_bytes,
                          uint32_t zero_bytes, bool writable);
@@ -266,13 +267,20 @@ static bool load_segment(struct file* file, off_t ofs, uint8_t* upage, uint32_t 
    Stores the executable's entry point into *EIP
    and its initial stack pointer into *ESP.
    Returns true if successful, false otherwise. */
-bool load(const char* file_name, void (**eip)(void), void** esp) {
+bool load(char* argv, void (**eip)(void), void** esp) {
   struct thread* t = thread_current();
   struct Elf32_Ehdr ehdr;
   struct file* file = NULL;
   off_t file_ofs;
   bool success = false;
   int i;
+
+  /* We create copy for setup_stack. strtok_r modifies string. */
+  char argv_copy[strlen(argv) + 1];
+  memcpy(argv_copy, argv, strlen(argv) + 1);
+
+  char* file_name, *dummy_p;
+  file_name = strtok_r(argv, " ", &dummy_p);
 
   /* Allocate and activate page directory. */
   t->pcb->pagedir = pagedir_create();
@@ -346,7 +354,7 @@ bool load(const char* file_name, void (**eip)(void), void** esp) {
   }
 
   /* Set up stack. */
-  if (!setup_stack(esp))
+  if (!setup_stack(esp, argv_copy))
     goto done;
 
   /* Start address. */
@@ -463,17 +471,73 @@ static bool load_segment(struct file* file, off_t ofs, uint8_t* upage, uint32_t 
 
 /* Create a minimal stack by mapping a zeroed page at the top of
    user virtual memory. */
-static bool setup_stack(void** esp) {
+static bool setup_stack(void** esp, char* argv) {
   uint8_t* kpage;
   bool success = false;
 
   kpage = palloc_get_page(PAL_USER | PAL_ZERO);
   if (kpage != NULL) {
     success = install_page(((uint8_t*)PHYS_BASE) - PGSIZE, kpage, true);
-    if (success)
+    if (success) {
       *esp = PHYS_BASE;
-    else
+      uint8_t* sp = *esp; /* Handy alias for *esp. */
+
+      /* Allocate room for the addresses we will be storing. */
+      int argc = count_words(argv);
+      uint32_t addresses[argc + 1];
+      int addr_i = 0;
+
+      /* Get token. */
+      char* token, *save_ptr;
+      for(token = strtok_r(argv, " ", &save_ptr); token != NULL;
+          token = strtok_r(NULL, " ", &save_ptr)) {
+
+        /* Get length of token. */
+        int token_len = strlen(token) + 1;
+        
+        /* Move stack back TOKEN_LEN bytes. */
+        sp -= token_len;
+
+        /* Copy token to stack. */
+        memcpy(sp, token, token_len);
+
+        /* Copy address of token beginning. */
+        addresses[addr_i++] = (uint32_t)sp;
+      }
+
+      addresses[argc] = 0x0;
+      sp -= 1;
+
+      /* Allign sp on 16-byte boundary. */
+      while(*((uint32_t*)(&sp)) % 0x10 != 0) {
+        memset(sp, 0x0, sizeof(char));
+        sp -= 1;
+      }
+
+      /* Copy addresses of passed in arguments to stack. */
+      for(int i = argc; i >= 0; i--) {
+        sp -= sizeof(uint32_t);
+        memcpy(sp, &addresses[i], sizeof(uint32_t));
+      }
+
+      /* Copy address of the beginning of argv. */
+      memcpy(sp - sizeof(uint32_t), &sp, sizeof(uint32_t));
+      sp -= sizeof(uint32_t);
+
+      /* Push argc to stack. */
+      sp -= sizeof(int);
+      memcpy(sp, &argc, sizeof(int));
+
+      /* Push dummy return address to stack. */
+      sp -= sizeof(void*);
+      memset(sp, 0x0, sizeof(void*));
+
+      /* Re-assign the actual stack pointer. */
+      *esp = (void*)sp;
+
+    } else {
       palloc_free_page(kpage);
+    }
   }
   return success;
 }
@@ -501,3 +565,21 @@ bool is_main_thread(struct thread* t, struct process* p) { return p->main_thread
 
 /* Gets the PID of a process */
 pid_t get_pid(struct process* p) { return (pid_t)p->main_thread->tid; }
+
+/* Counts words in a single string. */
+static int count_words(char* source) {
+  int count = 0;
+  char* start = source;
+  char* curr = source;
+
+  while(true) {
+    while(*start != '\0' && *start == ' ') start++;
+    curr = start;
+    while(*curr != '\0' && *curr != ' ') curr++;
+    int len = curr - start;
+    if(len == 0) break;
+    count++;
+    start = curr;
+  }
+  return count;
+}
