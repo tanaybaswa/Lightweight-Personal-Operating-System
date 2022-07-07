@@ -2,6 +2,7 @@
 #define USERPROG_PROCESS_H
 
 #include "threads/thread.h"
+#include "threads/synch.h"
 #include "lib/kernel/hash.h"
 #include <stdint.h>
 
@@ -28,6 +29,9 @@ struct process {
   uint32_t* pagedir;          /* Page directory. */
   char process_name[16];      /* Name of the main thread */
   struct thread* main_thread; /* Pointer to main thread */
+
+  struct hash children;       /* List of alive children. */
+  struct lock children_lock;  /* Lock used for above list. */
 };
 
 void userprog_init(void);
@@ -52,5 +56,16 @@ struct process_h {
 };
 
 bool init_pcb_index(void);
+
+/*
+ * Internal struct for tracking a process' children.
+ * Must use with lock (in struct process).
+ */
+
+
+struct process_l {
+  struct list_elem list_elem;
+  pid_t pid;
+};
 
 #endif /* userprog/process.h */
