@@ -23,7 +23,7 @@
 #include "lib/kernel/list.h"
 
 static struct semaphore temporary;
-static struct lock pcb_index_lock;
+static struct rw_lock pcb_index_lock;
 static struct hash pcb_index;
 static void add_process(struct hash* map, pid_t pid, struct process* process);
 static struct process* get_process(struct hash* map, pid_t pid);
@@ -52,9 +52,9 @@ void userprog_init(void) {
   t->pcb = calloc(sizeof(struct process), 1);
   success = t->pcb != NULL;
 
-  lock_acquire(&pcb_index_lock);
+  rw_lock_acquire(&pcb_index_lock, false);
   add_process(&pcb_index, t->tid, t->pcb);
-  lock_release(&pcb_index_lock);
+  rw_lock_release(&pcb_index_lock, false);
 
   /* Kill the kernel if we did not succeed */
   ASSERT(success);
@@ -91,8 +91,7 @@ static void start_process(void* argv_) {
   bool success, pcb_success;
 
   /* Allocate process control block */
-  struct process* new_pcb = malloc(sizeof(struct process));
-  new_pcb = init_process();
+  struct process* new_pcb = init_process();
   success = pcb_success = (new_pcb != NULL);
 
   /* Initialize interrupt frame and load executable. */
@@ -144,7 +143,7 @@ int process_wait(pid_t child_pid UNUSED) {
 }
 
 /* Free the current process's resources. */
-void process_exit(void) {
+void process_exit(int code) {
   struct thread* cur = thread_current();
 
   /* If this thread does not have a PCB, don't worry */
@@ -570,7 +569,7 @@ static void pcb_destructor(struct hash_elem* e, void* aux);
 
 
 bool init_pcb_index(void) {
-  lock_init(&pcb_index_lock);
+  rw_lock_init(&pcb_index_lock);
   return hash_init(&pcb_index, pcb_hash, pcb_less, NULL);
 }
 
@@ -641,9 +640,9 @@ static struct process* init_process(void) {
   lock_init(&new_process->children_lock);
   hash_init(&new_process->children, pcb_hash, pcb_less, NULL);
 
-  lock_acquire(&pcb_index_lock);
+  rw_lock_acquire(&pcb_index_lock, false);
   add_process(&pcb_index, thread->tid, new_process);
-  lock_release(&pcb_index_lock);
+  rw_lock_release(&pcb_index_lock, false);
 
   return new_process;
 }
@@ -651,9 +650,9 @@ static struct process* init_process(void) {
 static void free_process(struct process* process) {
   struct thread* thread = thread_current();
 
-  lock_acquire(&pcb_index_lock);
+  rw_lock_acquire(&pcb_index_lock, false);
   remove_process(&pcb_index, thread->tid);
-  lock_release(&pcb_index_lock);
+  rw_lock_release(&pcb_index_lock, false);
 
   uint32_t* pd = process->pagedir;
   if(pd != NULL) {
