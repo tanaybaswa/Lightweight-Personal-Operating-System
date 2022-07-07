@@ -25,9 +25,11 @@
 static struct semaphore temporary;
 static struct lock pcb_index_lock;
 static struct hash pcb_index;
-static void add_process(pid_t pid, struct process* process);
-static struct process* get_process(pid_t pid);
-static void remove_process(pid_t pid);
+static void add_process(struct hash* map, pid_t pid, struct process* process);
+static struct process* get_process(struct hash* map, pid_t pid);
+static void remove_process(struct hash* map, pid_t pid);
+static void free_process(struct process* process);
+static struct process* init_process(void);
 
 
 static thread_func start_process NO_RETURN;
@@ -51,7 +53,7 @@ void userprog_init(void) {
   success = t->pcb != NULL;
 
   lock_acquire(&pcb_index_lock);
-  add_process(t->tid, t->pcb);
+  add_process(&pcb_index, t->tid, t->pcb);
   lock_release(&pcb_index_lock);
 
   /* Kill the kernel if we did not succeed */
@@ -85,25 +87,13 @@ pid_t process_execute(const char* argv) {
    running. */
 static void start_process(void* argv_) {
   char* argv = (char*)argv_;
-  struct thread* t = thread_current();
   struct intr_frame if_;
   bool success, pcb_success;
 
   /* Allocate process control block */
   struct process* new_pcb = malloc(sizeof(struct process));
-  success = pcb_success = new_pcb != NULL;
-
-  /* Initialize process control block */
-  if (success) {
-    // Ensure that timer_interrupt() -> schedule() -> process_activate()
-    // does not try to activate our uninitialized pagedir
-    new_pcb->pagedir = NULL;
-    t->pcb = new_pcb;
-
-    // Continue initializing the PCB as normal
-    t->pcb->main_thread = t;
-    strlcpy(t->pcb->process_name, t->name, sizeof t->name);
-  }
+  new_pcb = init_process();
+  success = pcb_success = (new_pcb != NULL);
 
   /* Initialize interrupt frame and load executable. */
   if (success) {
@@ -119,9 +109,7 @@ static void start_process(void* argv_) {
     // Avoid race where PCB is freed before t->pcb is set to NULL
     // If this happens, then an unfortuantely timed timer interrupt
     // can try to activate the pagedir, but it is now freed memory
-    struct process* pcb_to_free = t->pcb;
-    t->pcb = NULL;
-    free(pcb_to_free);
+    free_process(new_pcb);
   }
 
   /* Clean up. Exit on failure or jump to userspace */
@@ -130,11 +118,6 @@ static void start_process(void* argv_) {
     sema_up(&temporary);
     thread_exit();
   }
-
-  /* Add PCB to PCB_INDEX. */
-  lock_acquire(&pcb_index_lock);
-  add_process(t->tid, t->pcb);
-  lock_release(&pcb_index_lock);
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -163,7 +146,6 @@ int process_wait(pid_t child_pid UNUSED) {
 /* Free the current process's resources. */
 void process_exit(void) {
   struct thread* cur = thread_current();
-  uint32_t* pd;
 
   /* If this thread does not have a PCB, don't worry */
   if (cur->pcb == NULL) {
@@ -171,34 +153,7 @@ void process_exit(void) {
     NOT_REACHED();
   }
 
-  /* Remove PCB from PCB_INDEX before freeing memory! */
-  lock_acquire(&pcb_index_lock);
-  remove_process(cur->tid);
-  lock_release(&pcb_index_lock);
-
-  /* Destroy the current process's page directory and switch back
-     to the kernel-only page directory. */
-  pd = cur->pcb->pagedir;
-  if (pd != NULL) {
-    /* Correct ordering here is crucial.  We must set
-         cur->pcb->pagedir to NULL before switching page directories,
-         so that a timer interrupt can't switch back to the
-         process page directory.  We must activate the base page
-         directory before destroying the process's page
-         directory, or our active page directory will be one
-         that's been freed (and cleared). */
-    cur->pcb->pagedir = NULL;
-    pagedir_activate(NULL);
-    pagedir_destroy(pd);
-  }
-
-  /* Free the PCB of this process and kill this thread
-     Avoid race where PCB is freed before t->pcb is set to NULL
-     If this happens, then an unfortuantely timed timer interrupt
-     can try to activate the pagedir, but it is now freed memory */
-  struct process* pcb_to_free = cur->pcb;
-  cur->pcb = NULL;
-  free(pcb_to_free);
+  free_process(cur->pcb);
 
   sema_up(&temporary);
   thread_exit();
@@ -607,10 +562,11 @@ static int count_words(char* source) {
   return count;
 }
 
-/* Functions for PCB_INDEX. */
+/* Functions for for adding/removing/getting from a pcb HASH. */
 
 static bool pcb_less(const struct hash_elem* a, const struct hash_elem* b, void* aux);
 static unsigned pcb_hash(const struct hash_elem* e, void* aux);
+static void pcb_destructor(struct hash_elem* e, void* aux);
 
 
 bool init_pcb_index(void) {
@@ -632,10 +588,10 @@ static unsigned pcb_hash(const struct hash_elem* e, void* aux) {
 }
 
 
-static struct process* get_process(pid_t pid) {
+static struct process* get_process(struct hash* map, pid_t pid) {
   struct process_h temp;
   temp.pid = pid;
-  struct hash_elem* e = hash_find(&pcb_index, &temp.hash_elem);
+  struct hash_elem* e = hash_find(map, &temp.hash_elem);
   if(!e) {
     return NULL;
   }
@@ -644,23 +600,76 @@ static struct process* get_process(pid_t pid) {
 }
 
 
-static void add_process(pid_t pid, struct process* process) {
+static void add_process(struct hash* map, pid_t pid, struct process* process) {
   struct process_h* temp = malloc(sizeof(struct process_h));
   temp->pid = pid;
   temp->process = process;
   /* TODO: Add check to assure that PID hasn't already been added? */
-  hash_insert(&pcb_index, &temp->hash_elem);
+  hash_insert(map, &temp->hash_elem);
 }
 
 
-static void remove_process(pid_t pid) {
+static bool is_process_in(struct hash* map, pid_t pid) {
   struct process_h temp;
   temp.pid = pid;
-  struct hash_elem* e = hash_find(&pcb_index, &temp.hash_elem);
-  if(!e) {
-    ASSERT(false);
+  struct hash_elem* e = hash_find(map, &temp.hash_elem);
+  if(e) return true;
+  return false;
+}
+
+static void remove_process(struct hash* map, pid_t pid) {
+  struct process_h temp;
+  temp.pid = pid;
+  struct hash_elem* e = hash_delete(map, &temp.hash_elem);
+  struct process_h* p = hash_entry(e, struct process_h, hash_elem);
+  free(p);
+}
+
+/* Functions for initializing and freeing a process. */
+
+static struct process* init_process(void) {
+  struct thread* thread = thread_current();
+  struct process* new_process = NULL;
+
+  new_process = malloc(sizeof(struct process));
+  if(!new_process) return NULL;
+
+  new_process->pagedir = NULL;
+  thread->pcb = new_process;
+  new_process->main_thread = thread;
+  strlcpy(new_process->process_name, thread->name, sizeof thread->name);
+  lock_init(&new_process->children_lock);
+  hash_init(&new_process->children, pcb_hash, pcb_less, NULL);
+
+  lock_acquire(&pcb_index_lock);
+  add_process(&pcb_index, thread->tid, new_process);
+  lock_release(&pcb_index_lock);
+
+  return new_process;
+}
+
+static void free_process(struct process* process) {
+  struct thread* thread = thread_current();
+
+  lock_acquire(&pcb_index_lock);
+  remove_process(&pcb_index, thread->tid);
+  lock_release(&pcb_index_lock);
+
+  uint32_t* pd = process->pagedir;
+  if(pd != NULL) {
+    process->pagedir = NULL;
+    pagedir_activate(NULL);
+    pagedir_destroy(pd);
   }
-  struct process_h* found = hash_entry(e, struct process_h, hash_elem);
-  free(found);
-  hash_delete(&pcb_index, e);
+
+  /* Lock not necessary because removed from PCB_INDEX. */
+  hash_destroy(&process->children, pcb_destructor);
+
+  thread->pcb = NULL;
+  free(process);
+}
+
+static void pcb_destructor(struct hash_elem* e, void* aux) {
+  struct process_h* p = hash_entry(e, struct process_h, hash_elem);
+  free(p);
 }
