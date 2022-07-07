@@ -19,8 +19,17 @@
 #include "threads/synch.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "lib/kernel/hash.h"
+#include "lib/kernel/list.h"
 
 static struct semaphore temporary;
+static struct lock pcb_index_lock;
+static struct hash pcb_index;
+static void add_process(pid_t pid, struct process* process);
+static struct process* get_process(pid_t pid);
+static void remove_process(pid_t pid);
+
+
 static thread_func start_process NO_RETURN;
 static bool load(char* argv, void (**eip)(void), void** esp);
 static int count_words(char* argv);
@@ -40,6 +49,10 @@ void userprog_init(void) {
      can come at any time and activate our pagedir */
   t->pcb = calloc(sizeof(struct process), 1);
   success = t->pcb != NULL;
+
+  lock_acquire(&pcb_index_lock);
+  add_process(t->tid, t->pcb);
+  lock_release(&pcb_index_lock);
 
   /* Kill the kernel if we did not succeed */
   ASSERT(success);
@@ -118,6 +131,11 @@ static void start_process(void* argv_) {
     thread_exit();
   }
 
+  /* Add PCB to PCB_INDEX. */
+  lock_acquire(&pcb_index_lock);
+  add_process(t->tid, t->pcb);
+  lock_release(&pcb_index_lock);
+
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
      threads/intr-stubs.S).  Because intr_exit takes all of its
@@ -152,6 +170,11 @@ void process_exit(void) {
     thread_exit();
     NOT_REACHED();
   }
+
+  /* Remove PCB from PCB_INDEX before freeing memory! */
+  lock_acquire(&pcb_index_lock);
+  remove_process(cur->tid);
+  lock_release(&pcb_index_lock);
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
@@ -582,4 +605,62 @@ static int count_words(char* source) {
     start = curr;
   }
   return count;
+}
+
+/* Functions for PCB_INDEX. */
+
+static bool pcb_less(const struct hash_elem* a, const struct hash_elem* b, void* aux);
+static unsigned pcb_hash(const struct hash_elem* e, void* aux);
+
+
+bool init_pcb_index(void) {
+  lock_init(&pcb_index_lock);
+  return hash_init(&pcb_index, pcb_hash, pcb_less, NULL);
+}
+
+
+static bool pcb_less(const struct hash_elem* a, const struct hash_elem* b, void* aux) {
+  struct process_h* pa = hash_entry(a, struct process_h, hash_elem);
+  struct process_h* pb = hash_entry(b, struct process_h, hash_elem);
+  return pa->pid - pb->pid;
+}
+
+
+static unsigned pcb_hash(const struct hash_elem* e, void* aux) {
+  struct process_h* p = hash_entry(e, struct process_h, hash_elem);
+  return p->pid;
+}
+
+
+static struct process* get_process(pid_t pid) {
+  struct process_h temp;
+  temp.pid = pid;
+  struct hash_elem* e = hash_find(&pcb_index, &temp.hash_elem);
+  if(!e) {
+    return NULL;
+  }
+  struct process_h* found = hash_entry(e, struct process_h, hash_elem);
+  return found->process;
+}
+
+
+static void add_process(pid_t pid, struct process* process) {
+  struct process_h* temp = malloc(sizeof(struct process_h));
+  temp->pid = pid;
+  temp->process = process;
+  /* TODO: Add check to assure that PID hasn't already been added? */
+  hash_insert(&pcb_index, &temp->hash_elem);
+}
+
+
+static void remove_process(pid_t pid) {
+  struct process_h temp;
+  temp.pid = pid;
+  struct hash_elem* e = hash_find(&pcb_index, &temp.hash_elem);
+  if(!e) {
+    ASSERT(false);
+  }
+  struct process_h* found = hash_entry(e, struct process_h, hash_elem);
+  free(found);
+  hash_delete(&pcb_index, e);
 }

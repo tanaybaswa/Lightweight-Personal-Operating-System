@@ -2,6 +2,7 @@
 #define USERPROG_PROCESS_H
 
 #include "threads/thread.h"
+#include "lib/kernel/hash.h"
 #include <stdint.h>
 
 // At most 8MB can be allocated to the stack
@@ -38,5 +39,18 @@ void process_activate(void);
 
 bool is_main_thread(struct thread*, struct process*);
 pid_t get_pid(struct process*);
+
+/*
+ * Internal struct for using processes in a hash map.
+ * Hashes a pid_t to a struct process*. Note that this
+ * only functions because pids are unique.
+ */
+struct process_h {
+  struct hash_elem hash_elem;
+  pid_t pid;
+  struct process* process;
+};
+
+bool init_pcb_index(void);
 
 #endif /* userprog/process.h */
