@@ -5,9 +5,18 @@
 #include "threads/thread.h"
 #include "userprog/process.h"
 
+struct lock filesyscall_lock; 
+
 static void syscall_handler(struct intr_frame*);
 
-void syscall_init(void) { intr_register_int(0x30, 3, INTR_ON, syscall_handler, "syscall"); }
+void syscall_init(void) { 
+  lock_init(&filesyscall_lock);
+  intr_register_int(0x30, 3, INTR_ON, syscall_handler, "syscall"); 
+}
+
+int practice(int i) {
+    return i + 1; /* Occasionally crashes PintOS. */
+}
 
 static void syscall_handler(struct intr_frame* f UNUSED) {
   uint32_t* args = ((uint32_t*)f->esp);
@@ -25,5 +34,18 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
     f->eax = args[1];
     printf("%s: exit(%d)\n", thread_current()->pcb->process_name, args[1]);
     process_exit();
+  } else if (args[0] == SYS_WRITE) {
+    // fd is arg[1]
+    if (args[1] == STDOUT_FILENO) { // stdout
+      lock_acquire(&filesyscall_lock);
+      putbuf((char *)args[2], args[3]); // buffer is args[2], size is args[3]
+      lock_release(&filesyscall_lock);
+    }
+  } else if (args[0] == SYS_PRACTICE) {
+    f->eax = practice(args[1]);
   }
+
+
+
+
 }
