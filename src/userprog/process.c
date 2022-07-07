@@ -65,9 +65,7 @@ void userprog_init(void) {
    before process_execute() returns.  Returns the new process's
    process id, or TID_ERROR if the thread cannot be created. */
 pid_t process_execute(const char* argv) {
-  char* argv_copy;
-  char* filename;
-  char* saveptr;
+  char* argv_copy, *file_name;
   tid_t tid;
 
   sema_init(&temporary, 0);
@@ -77,12 +75,16 @@ pid_t process_execute(const char* argv) {
   if (argv_copy == NULL)
     return TID_ERROR;
   strlcpy(argv_copy, argv, PGSIZE);
-  filename = strtok_r(argv_copy, " ", &saveptr);
+
+  /* Copy the name of file into file_name. Use argv, not argv_copy because
+   * strtok_r modifies the original. 
+   */
+  
 
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create(filename, PRI_DEFAULT, start_process, argv);
-  // if (tid == TID_ERROR)
-  palloc_free_page(argv_copy);
+  tid = thread_create(argv, PRI_DEFAULT, start_process, argv_copy);
+  if (tid == TID_ERROR)
+    palloc_free_page(argv_copy);
 
   return tid;
 }
@@ -116,7 +118,7 @@ static void start_process(void* argv_) {
   }
 
   /* Clean up. Exit on failure or jump to userspace */
-  // palloc_free_page(argv);
+  palloc_free_page(argv);
   if (!success) {
     sema_up(&temporary);
     thread_exit();
