@@ -65,7 +65,9 @@ void userprog_init(void) {
    before process_execute() returns.  Returns the new process's
    process id, or TID_ERROR if the thread cannot be created. */
 pid_t process_execute(const char* argv) {
-  char* argv_copy, *file_name;
+  char* argv_copy;
+  char filenamebuf[15]; // max file name length is 14 + null char
+  char* saveptr, *filename;
   tid_t tid;
 
   sema_init(&temporary, 0);
@@ -79,10 +81,11 @@ pid_t process_execute(const char* argv) {
   /* Copy the name of file into file_name. Use argv, not argv_copy because
    * strtok_r modifies the original. 
    */
-  
+  strlcpy(filenamebuf, argv, 15);
+  filename = strtok_r(filenamebuf, " ", &saveptr);
 
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create(argv, PRI_DEFAULT, start_process, argv_copy);
+  tid = thread_create(filename, PRI_DEFAULT, start_process, argv_copy);
   if (tid == TID_ERROR)
     palloc_free_page(argv_copy);
 
