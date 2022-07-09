@@ -49,7 +49,7 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
       break;
     case SYS_WAIT:
       validate_stack(args, 1);
-      //f->eax = process_wait(args[0]);
+      f->eax = process_wait(args[0]);
       break;
     case SYS_WRITE:
       validate_stack(args, 1);

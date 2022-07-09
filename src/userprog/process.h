@@ -32,16 +32,17 @@ struct process {
 
   struct hash children;        /* Hash of pid_t/struct process*  */
   struct hash exit_codes;      /* Hash of pid_t/int. */
-  struct lock children_lock;   /* Lock used for children hash. */
   struct lock exit_codes_lock; /* Lock used for exit_codes hash. */
   struct semaphore blocked;    /* Semaphore used for wait/exec func. calls. */
 
   uint8_t flags;
+  pid_t awaiting_id;
 };
 
 enum process_flags {
   NO_FLAGS = 0,
-  CHILD_LOAD_SUCCESS = 1
+  CHILD_LOAD_SUCCESS = 1,
+  PROCESS_WAITING = 2
 };
 
 void userprog_init(void);
