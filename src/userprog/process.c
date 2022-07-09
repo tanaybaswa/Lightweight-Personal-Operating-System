@@ -30,6 +30,8 @@ static struct process* get_process(struct hash* map, pid_t pid);
 static void remove_process(struct hash* map, pid_t pid);
 static void free_process(struct process* process);
 static struct process* init_process(void);
+static bool is_flag_on(uint8_t p_flags, uint8_t flag);
+static void set_flag(uint8_t* p_flags, uint8_t, int val);
 
 
 static thread_func start_process NO_RETURN;
@@ -49,12 +51,13 @@ void userprog_init(void) {
      so that t->pcb->pagedir is guaranteed to be NULL (the kernel's
      page directory) when t->pcb is assigned, because a timer interrupt
      can come at any time and activate our pagedir */
-  t->pcb = calloc(sizeof(struct process), 1);
+  struct process* pcb = init_process();
+  //t->pcb = calloc(sizeof(struct process), 1);
   success = t->pcb != NULL;
 
-  rw_lock_acquire(&pcb_index_lock, false);
-  add_process(&pcb_index, t->tid, t->pcb);
-  rw_lock_release(&pcb_index_lock, false);
+  //rw_lock_acquire(&pcb_index_lock, false);
+  //add_process(&pcb_index, t->tid, t->pcb);
+  //rw_lock_release(&pcb_index_lock, false);
 
   /* Kill the kernel if we did not succeed */
   ASSERT(success);
@@ -65,10 +68,11 @@ void userprog_init(void) {
    before process_execute() returns.  Returns the new process's
    process id, or TID_ERROR if the thread cannot be created. */
 pid_t process_execute(const char* argv) {
-  char* argv_copy;
-  char filenamebuf[15]; // max file name length is 14 + null char
-  char* saveptr, *filename;
+#define MAX_FILE_NAME_LENGTH 32
+  char* argv_copy, *save_ptr, *file_name;
+  char file_name_buf[MAX_FILE_NAME_LENGTH]; 
   tid_t tid;
+  struct thread* t = thread_current();
 
   sema_init(&temporary, 0);
   /* Make a copy of FILE_NAME.
@@ -78,18 +82,28 @@ pid_t process_execute(const char* argv) {
     return TID_ERROR;
   strlcpy(argv_copy, argv, PGSIZE);
 
-  /* Copy the name of file into file_name. Use argv, not argv_copy because
-   * strtok_r modifies the original. 
-   */
-  strlcpy(filenamebuf, argv, 15);
-  filename = strtok_r(filenamebuf, " ", &saveptr);
+  /* Copy the name of file into file_name. */
+  strlcpy(file_name_buf, argv, MAX_FILE_NAME_LENGTH);
+  file_name = strtok_r(file_name_buf, " ", &save_ptr);
 
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create(filename, PRI_DEFAULT, start_process, argv_copy);
-  if (tid == TID_ERROR)
+  tid = thread_create(file_name, PRI_DEFAULT, start_process, argv_copy);
+  if (tid == TID_ERROR) {
     palloc_free_page(argv_copy);
+    return tid;
+  } else {
+    struct process* parent = t->pcb;
+    sema_down(&parent->blocked);
+    if(is_flag_on(parent->flags, CHILD_LOAD_SUCCESS)) {
+      lock_acquire(&parent->children_lock);
+      add_process(&pcb_index, tid, NULL); /* No references to process! */
+      lock_release(&parent->children_lock);
+    }
+  }
+
 
   return tid;
+#undef MAX_FILE_NAME_LENGTH
 }
 
 /* A thread function that loads a user process and starts it
@@ -97,6 +111,7 @@ pid_t process_execute(const char* argv) {
 static void start_process(void* argv_) {
   char* argv = (char*)argv_;
   struct intr_frame if_;
+  struct thread* t = thread_current();
   bool success, pcb_success;
 
   /* Allocate process control block */
@@ -122,10 +137,23 @@ static void start_process(void* argv_) {
 
   /* Clean up. Exit on failure or jump to userspace */
   palloc_free_page(argv);
+  rw_lock_acquire(&pcb_index_lock, true);
+  struct process* parent = get_process(&pcb_index, t->parent_tid);
   if (!success) {
+    if(parent) {
+      set_flag(&parent->flags, CHILD_LOAD_SUCCESS, 0);
+      sema_up(&parent->blocked);
+    }
     sema_up(&temporary);
+    rw_lock_release(&pcb_index_lock, true);
     thread_exit();
   }
+
+  if(parent) {
+    set_flag(&parent->flags, CHILD_LOAD_SUCCESS, 1);
+    sema_up(&parent->blocked);
+  }
+  rw_lock_release(&pcb_index_lock, true);
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -583,14 +611,14 @@ bool init_pcb_index(void) {
 }
 
 
-static bool pcb_less(const struct hash_elem* a, const struct hash_elem* b, void* aux) {
+static bool pcb_less(const struct hash_elem* a, const struct hash_elem* b, UNUSED void* aux) {
   struct process_h* pa = hash_entry(a, struct process_h, hash_elem);
   struct process_h* pb = hash_entry(b, struct process_h, hash_elem);
   return pa->pid - pb->pid;
 }
 
 
-static unsigned pcb_hash(const struct hash_elem* e, void* aux) {
+static unsigned pcb_hash(const struct hash_elem* e, UNUSED void* aux) {
   struct process_h* p = hash_entry(e, struct process_h, hash_elem);
   return p->pid;
 }
@@ -639,15 +667,20 @@ static struct process* init_process(void) {
   struct thread* thread = thread_current();
   struct process* new_process = NULL;
 
-  new_process = malloc(sizeof(struct process));
+  /* Always use calloc to insure pcb->pagedir is NULL! */
+  new_process = calloc(sizeof(struct process), 1);
   if(!new_process) return NULL;
 
   new_process->pagedir = NULL;
   thread->pcb = new_process;
   new_process->main_thread = thread;
   strlcpy(new_process->process_name, thread->name, sizeof thread->name);
+  new_process->flags = NO_FLAGS;
   lock_init(&new_process->children_lock);
+  lock_init(&new_process->exit_codes_lock);
+  sema_init(&new_process->blocked, 0);
   hash_init(&new_process->children, pcb_hash, pcb_less, NULL);
+  hash_init(&new_process->exit_codes, pcb_hash, pcb_less, NULL);
 
   rw_lock_acquire(&pcb_index_lock, false);
   add_process(&pcb_index, thread->tid, new_process);
@@ -672,12 +705,29 @@ static void free_process(struct process* process) {
 
   /* Lock not necessary because removed from PCB_INDEX. */
   hash_destroy(&process->children, pcb_destructor);
+  hash_destroy(&process->exit_codes, pcb_destructor);
 
   thread->pcb = NULL;
   free(process);
 }
 
-static void pcb_destructor(struct hash_elem* e, void* aux) {
+static void pcb_destructor(struct hash_elem* e, UNUSED void* aux) {
   struct process_h* p = hash_entry(e, struct process_h, hash_elem);
   free(p);
+}
+
+
+static bool is_flag_on(uint8_t p_flags, uint8_t flag) {
+  return (p_flags & flag) == flag;
+}
+
+
+static void set_flag(uint8_t* p_flags, uint8_t flag, int val) {
+  if(!val) {
+    /* Clear flag. */
+    *p_flags = val & ~flag;
+  } else {
+    /* Turn flag on. */
+    *p_flags = val | flag;
+  }
 }

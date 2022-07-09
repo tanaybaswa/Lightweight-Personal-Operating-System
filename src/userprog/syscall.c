@@ -31,20 +31,21 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
 
   /* printf("System call number: %d\n", args[0]); */
 
-  switch(args[0]) {
+  validate_stack(args, 1);
+  switch(*args++) {
     case SYS_EXIT:
       validate_stack(args, 1);
-      f->eax = args[1];
-      printf("%s: exit(%d)\n", thread_current()->pcb->process_name, args[1]);
-      process_exit(args[1]);
+      f->eax = args[0];
+      printf("%s: exit(%d)\n", thread_current()->pcb->process_name, args[0]);
+      process_exit(args[0]);
       break;
     case SYS_PRACTICE:
       validate_stack(args, 1);
-      f->eax = args[1] + 1;
+      f->eax = args[0] + 1;
       break;
     case SYS_EXEC:
       validate_stack(args, 1);
-      //f->eax = process_execute(args[0]);
+      f->eax = process_execute(args[0]);
       break;
     case SYS_WAIT:
       validate_stack(args, 1);
@@ -52,10 +53,10 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
       break;
     case SYS_WRITE:
       validate_stack(args, 1);
-      if(args[1] == STDOUT_FILENO) {
+      if(args[0] == STDOUT_FILENO) {
         validate_stack(args, 2);
         lock_acquire(&filesyscall_lock);
-        putbuf((char*)args[2], args[3]);
+        putbuf((char*)args[1], args[2]);
         lock_release(&filesyscall_lock);
       }
       break;
@@ -72,12 +73,13 @@ static void validate_stack(uint32_t* esp, int count) {
   for(i = 0; i < count; i++) {
     /* Check if esp is NULL. */
     if(!esp) break;
+    
 
     /* Check if esp is a user addr. */
     if(!is_user_vaddr(esp)) break;
 
     /* Check if esp points to a non-existent page. */
-    if(!lookup_page(pg_round_down(esp), esp, false)) break;
+    //if(!lookup_page(pg_round_down(esp), esp, false)) break;
 
     esp += 1; /* Validate the next argument. */
   }

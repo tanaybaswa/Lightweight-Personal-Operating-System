@@ -53,7 +53,7 @@ static long long user_ticks;   /* # of timer ticks in user programs. */
 #define TIME_SLICE 4          /* # of timer ticks to give each thread. */
 static unsigned thread_ticks; /* # of timer ticks since last yield. */
 
-static void init_thread(struct thread*, const char* name, int priority);
+static void init_thread(struct thread*, const char* name, int priority, int parent_pid);
 static bool is_thread(struct thread*) UNUSED;
 static void* alloc_frame(struct thread*, size_t size);
 static void schedule(void);
@@ -112,7 +112,7 @@ void thread_init(void) {
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread();
-  init_thread(initial_thread, "main", PRI_DEFAULT);
+  init_thread(initial_thread, "main", PRI_DEFAULT, 0);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid();
 }
@@ -188,7 +188,7 @@ tid_t thread_create(const char* name, int priority, thread_func* function, void*
     return TID_ERROR;
 
   /* Initialize thread. */
-  init_thread(t, name, priority);
+  init_thread(t, name, priority, thread_current()->tid);
   tid = t->tid = allocate_tid();
 
   /* Stack frame for kernel_thread(). */
@@ -416,7 +416,7 @@ static bool is_thread(struct thread* t) { return t != NULL && t->magic == THREAD
 
 /* Does basic initialization of T as a blocked thread named
    NAME. */
-static void init_thread(struct thread* t, const char* name, int priority) {
+static void init_thread(struct thread* t, const char* name, int priority, int parent_tid) {
   enum intr_level old_level;
 
   ASSERT(t != NULL);
@@ -425,6 +425,7 @@ static void init_thread(struct thread* t, const char* name, int priority) {
 
   memset(t, 0, sizeof *t);
   t->status = THREAD_BLOCKED;
+  t->parent_tid = parent_tid;
   strlcpy(t->name, name, sizeof t->name);
   t->stack = (uint8_t*)t + PGSIZE;
   t->priority = priority;

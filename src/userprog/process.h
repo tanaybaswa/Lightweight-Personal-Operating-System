@@ -26,12 +26,22 @@ typedef void (*stub_fun)(pthread_fun, void*);
    of the process, which is `special`. */
 struct process {
   /* Owned by process.c. */
-  uint32_t* pagedir;          /* Page directory. */
-  char process_name[16];      /* Name of the main thread */
-  struct thread* main_thread; /* Pointer to main thread */
+  uint32_t* pagedir;           /* Page directory. */
+  char process_name[16];       /* Name of the main thread */
+  struct thread* main_thread;  /* Pointer to main thread */
 
-  struct hash children;       /* List of alive children. */
-  struct lock children_lock;  /* Lock used for above list. */
+  struct hash children;        /* Hash of pid_t/struct process*  */
+  struct hash exit_codes;      /* Hash of pid_t/int. */
+  struct lock children_lock;   /* Lock used for children hash. */
+  struct lock exit_codes_lock; /* Lock used for exit_codes hash. */
+  struct semaphore blocked;    /* Semaphore used for wait/exec func. calls. */
+
+  uint8_t flags;
+};
+
+enum process_flags {
+  NO_FLAGS = 0,
+  CHILD_LOAD_SUCCESS = 1
 };
 
 void userprog_init(void);
@@ -53,19 +63,10 @@ struct process_h {
   struct hash_elem hash_elem;
   pid_t pid;
   struct process* process;
+  int exit_val; 
 };
 
 bool init_pcb_index(void);
 
-/*
- * Internal struct for tracking a process' children.
- * Must use with lock (in struct process).
- */
-
-
-struct process_l {
-  struct list_elem list_elem;
-  pid_t pid;
-};
 
 #endif /* userprog/process.h */
