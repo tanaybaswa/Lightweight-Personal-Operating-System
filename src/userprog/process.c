@@ -544,10 +544,16 @@ static bool setup_stack(void** esp, char* argv) {
       sp -= 1;
 
       /* Allign sp on 16-byte boundary. */
-      while(*((uint32_t*)(&sp)) % 0x10 != 0) {
+      while(((uint32_t)sp - (sizeof(uint32_t*) * (argc + 3))) % 0x10 != 0) {
         memset(sp, 0x0, sizeof(char));
         sp -= 1;
       }
+
+      /* We add num. of argc + 1 + &argv + argc
+       *    ie. argc + 3 */
+
+      //int align_count = argc + 4;
+      //if(*((uint32_t*)(&sp)) - align_count % 0x10 != 0
 
       /* Copy addresses of passed in arguments to stack. */
       for(int i = argc; i >= 0; i--) {
