@@ -98,6 +98,8 @@ pid_t process_execute(const char* argv) {
     sema_down(&parent->blocked);
     if(is_flag_on(parent->flags, CHILD_LOAD_SUCCESS)) {
       add_process(&parent->children, tid, NULL); 
+    } else {
+      tid = -1;
     }
   }
 
@@ -196,6 +198,7 @@ int process_wait(pid_t child_pid) {
     lock_acquire(&parent->exit_codes_lock);
     int exit_val = get_process_exit(&parent->exit_codes, child_pid);
     remove_process(&parent->exit_codes, child_pid);
+    lock_release(&parent->exit_codes_lock);
     set_flag(&parent->flags, PROCESS_WAITING, 0);
     return exit_val;
   }
