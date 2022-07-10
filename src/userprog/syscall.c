@@ -6,6 +6,7 @@
 #include "userprog/process.h"
 #include "userprog/pagedir.h"
 #include "threads/vaddr.h"
+#include "devices/shutdown.h"
 
 struct lock filesyscall_lock; 
 
@@ -50,6 +51,9 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
     case SYS_WAIT:
       validate_stack(args, 1);
       f->eax = process_wait(args[0]);
+      break;
+    case SYS_HALT:
+      shutdown_power_off();
       break;
     case SYS_WRITE:
       validate_stack(args, 1);

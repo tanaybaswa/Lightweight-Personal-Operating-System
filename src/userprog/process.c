@@ -33,7 +33,7 @@ static void remove_process(struct hash* map, pid_t pid);
 static void free_process(struct process* process, int exit_val);
 static struct process* init_process(void);
 static bool is_flag_on(uint8_t p_flags, uint8_t flag);
-static void set_flag(uint8_t* p_flags, uint8_t, int val);
+static void set_flag(uint8_t* p_flags, uint8_t flag, int val);
 static bool is_process_in(struct hash* map, pid_t pid);
 
 
@@ -97,7 +97,7 @@ pid_t process_execute(const char* argv) {
     struct process* parent = t->pcb;
     sema_down(&parent->blocked);
     if(is_flag_on(parent->flags, CHILD_LOAD_SUCCESS)) {
-      add_process(&pcb_index, tid, NULL); 
+      add_process(&parent->children, tid, NULL); 
     }
   }
 
@@ -183,6 +183,7 @@ int process_wait(pid_t child_pid) {
   /* No need to lock, only parent adds to its list. */
   if(is_process_in(&parent->children, child_pid)) {
     parent->awaiting_id = child_pid;
+    set_flag(&parent->flags, PROCESS_WAITING, 1);
     rw_lock_acquire(&pcb_index_lock, true);
     bool child_alive = is_process_in(&pcb_index, child_pid);
     rw_lock_release(&pcb_index_lock, true);
@@ -195,6 +196,7 @@ int process_wait(pid_t child_pid) {
     lock_acquire(&parent->exit_codes_lock);
     int exit_val = get_process_exit(&parent->exit_codes, child_pid);
     remove_process(&parent->exit_codes, child_pid);
+    set_flag(&parent->flags, PROCESS_WAITING, 0);
     return exit_val;
   }
   return -1;
@@ -203,7 +205,6 @@ int process_wait(pid_t child_pid) {
 /* Free the current process's resources. */
 void process_exit(int code) {
   struct thread* cur = thread_current();
-
   /* If this thread does not have a PCB, don't worry */
   if (cur->pcb == NULL) {
     thread_exit();
