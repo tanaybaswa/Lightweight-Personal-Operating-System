@@ -94,12 +94,12 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
       break;
     case SYS_CREATE:
       validate_stack(args, 2);
-      bool created = create((char*)args[1], args[2]);
+      bool created = create((char*)args[0], args[1]);
       f->eax = created;
       break;
     case SYS_REMOVE:
       validate_stack(args, 1);
-      bool removed = remove((char*)args[1]);
+      bool removed = remove((char*)args[0]);
       f->eax = removed;
       break;
     case SYS_OPEN:
@@ -109,14 +109,12 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
       break;
     case SYS_WRITE:
       validate_stack(args, 1);
-      if(args[0] == STDOUT_FILENO) {
+      if(args[0] == 1) { // STDOUT_FILENO = 1
         lock_acquire(&filesyscall_lock);
         putbuf((char*)args[1], args[2]);
         lock_release(&filesyscall_lock);
       } else {
-        lock_acquire(&filesyscall_lock);
         int num_bytes = write(args[0], (void*)args[1], args[2]);
-        lock_release(&filesyscall_lock);
         f->eax = num_bytes;
       }
       break;
@@ -164,6 +162,9 @@ static void validate_stack(uint32_t* esp, bool allow_rw) {
 
 /* creates new file of initial_size bytes, return whether succesful or not */
 static bool create(const char* file, unsigned initial_size) {
+  if (file == NULL) {
+    return false;
+  }
   lock_acquire(&filesyscall_lock); 
   bool success = filesys_create(file, initial_size);
   lock_release(&filesyscall_lock);
@@ -182,6 +183,12 @@ static bool remove(const char* file) {
 int open(const char* file) {
   struct file* file_ptr;
   int fd;
+  if (file == NULL) {
+    return -1;
+  } 
+  if (!is_user_vaddr(file)) {
+    return -1;
+  }
   fd_hash_entry_t* fd_entry = (fd_hash_entry_t*) malloc(sizeof(fd_hash_entry_t));
   if (fd_entry == NULL) {
     return -1;
@@ -207,6 +214,7 @@ int open(const char* file) {
 
 /* writes size number of bytes from buffer, return num bytes written */
 int write(int fd, const void* buffer, unsigned size) {
+  
   fd_hash_entry_t fd_entry_temp;
   fd_entry_temp.fd = fd;
   lock_acquire(&fd_tab_lock);
@@ -222,6 +230,8 @@ int write(int fd, const void* buffer, unsigned size) {
   lock_release(&filesyscall_lock);
   return num_bytes_written;
 }
+
+
 
 static int get_next_fd(void) {
   lock_acquire(&filesyscall_lock);
