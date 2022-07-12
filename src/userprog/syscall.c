@@ -7,10 +7,16 @@
 #include "userprog/pagedir.h"
 #include "threads/vaddr.h"
 
-struct lock filesyscall_lock; 
+static struct lock filesyscall_lock; 
+static int next_fd = 3; // minimum fd start with 3
+
 
 static void syscall_handler(struct intr_frame*);
 static void validate_stack(uint32_t* esp, int count);
+static bool create(const char* file, unsigned initial_size);
+static bool remove(const char* file);
+static int get_next_fd();
+
 
 
 void syscall_init(void) { 
@@ -50,12 +56,27 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
       validate_stack(args, 1);
       //f->eax = process_wait(args[0]);
       break;
-    case SYS_WRITE:
+    case SYS_CREATE:
+      validate_stack(args, 2);
+      bool created = create(args[1], args[2]);
+      f->eax = created;
+      break;
+    case SYS_REMOVE:
       validate_stack(args, 1);
+      bool removed = remove(args[1]);
+      f->eax = removed;
+      break;
+    case SYS_WRITE:
+      validate_stack(args, 3);
       if(args[1] == STDOUT_FILENO) {
-        validate_stack(args, 2);
+        // validate_stack(args, 2);
         lock_acquire(&filesyscall_lock);
         putbuf((char*)args[2], args[3]);
+        lock_release(&filesyscall_lock);
+      } else {
+        lock_acquire(&filesyscall_lock);
+        // ((char*)args[2], args[3]);
+        putbuf(args[1], args[2], args[3]);
         lock_release(&filesyscall_lock);
       }
       break;
@@ -86,3 +107,28 @@ static void validate_stack(uint32_t* esp, int count) {
   process_exit(INVALID_STACK);
 #undef INVALID_STACK
 }
+
+/* creates new file of initial_size bytes, return whether succesful or not */
+static bool create(const char* file, unsigned initial_size) {
+  lock_acquire(&filesyscall_lock); 
+  bool success = filesys_create(file, initial_size);
+  lock_release(&filesyscall_lock);
+  return success;
+}
+
+/* deletes file, return whether successful or not */
+static bool remove(const char* file) {
+  lock_acquire(&filesyscall_lock); 
+  bool success = filesys_remove(file);
+  lock_release(&filesyscall_lock);
+  return success;
+}
+
+static int get_next_fd() {
+  lock_acquire(&filesyscall_lock);
+  int fd = next_fd;
+  next_fd++;
+  lock_release(&filesyscall_lock);
+  return fd;
+}
+
