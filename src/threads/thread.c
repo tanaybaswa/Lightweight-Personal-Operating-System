@@ -202,9 +202,13 @@ tid_t thread_create(const char* name, int priority, thread_func* function, void*
   ef->eip = (void (*)(void))kernel_thread;
 
   /* Stack frame for switch_threads(). */
+  //printf("%d\n\n\n\n\n\n", sizeof *sf);
   sf = alloc_frame(t, sizeof *sf);
   sf->eip = switch_entry;
   sf->ebp = 0;
+
+  char fpu[108];
+  asm volatile("fsave (%0); fninit; fsave (%1); frstor (%0)" : : "g"(&fpu), "g"(&sf->fpu) : "memory");
 
   /* Add to run queue. */
   thread_unblock(t);
