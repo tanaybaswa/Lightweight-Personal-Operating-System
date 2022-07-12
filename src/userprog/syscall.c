@@ -37,6 +37,7 @@ static void seek(int fd, unsigned position);
 static unsigned tell(int fd);
 static void close(int fd);
 static struct file* fd_to_fptr(int fd);
+int sys_sum_to_e(int);
 
 static int get_next_fd(void);
 
@@ -154,6 +155,10 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
     case SYS_CLOSE:
       validate_stack(args, 1);
       close(args[0]);
+      break;
+    case SYS_COMPUTE_E:
+      validate_stack(args, 1);
+      f->eax = sys_sum_to_e((int) args[0]);
       break;
     default:
       break;
