@@ -26,7 +26,7 @@ typedef struct fd_hash_entry {
 } fd_hash_entry_t;
 
 static void syscall_handler(struct intr_frame*);
-static void validate_stack(uint32_t* esp, bool allow_rw);
+static void validate_stack(uint32_t* esp, int bytes, bool allow_rw);
 static bool create(const char* file, unsigned initial_size);
 static bool remove(const char* file);
 static int open(const char* file);
@@ -72,100 +72,134 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
 
   /* printf("System call number: %d\n", args[0]); */
 
-  validate_stack(args, 1);
+  /* Validate the stack pointer (switch argument). */
+  validate_stack(args, 4, true);
 
 
-
+  int fd;
   switch(*args++) {
     case SYS_EXIT:
-      validate_stack(args, 1);
+      validate_stack(args, sizeof(int), true);
       f->eax = args[0];
       printf("%s: exit(%d)\n", thread_current()->pcb->process_name, args[0]);
       process_exit((int)args[0]);
       break;
+
     case SYS_PRACTICE:
-      validate_stack(args, 1);
+      validate_stack(args, sizeof(int), true);
       f->eax = (int)args[0] + 1;
       break;
+
     case SYS_EXEC:
-      validate_stack(args, 1);
-      validate_stack((uint32_t*)args[0], 1);
+      validate_stack(args, sizeof(char**), true);
+      validate_stack((uint32_t*)args[0], sizeof(char*), true);
       f->eax = process_execute((char*)args[0]);
       break;
+
     case SYS_WAIT:
-      validate_stack(args, 1);
+      validate_stack(args, sizeof(pid_t), true);
       f->eax = process_wait((pid_t)args[0]);
       break;
+
     case SYS_HALT:
       shutdown_power_off();
       break;
+
     case SYS_CREATE:
-      validate_stack(args, 2);
-      bool created = create((char*)args[0], args[1]);
+      validate_stack(args, sizeof(char**), true);
+      validate_stack((uint32_t*)args[0], sizeof(char*), true);
+      const char* file = (const char*)(*args++); 
+      validate_stack(args, sizeof(unsigned), true);
+      bool created = create(file, args[0]);
       f->eax = created;
       break;
+
     case SYS_REMOVE:
-      validate_stack(args, 1);
+      validate_stack(args, sizeof(char**), true);
+      validate_stack((uint32_t*)args[0], sizeof(char*), true);
       bool removed = remove((char*)args[0]);
       f->eax = removed;
       break;
+
     case SYS_OPEN:
-      validate_stack(args, 1);
-      int fd = open((char*)args[0]);
+      validate_stack(args, sizeof(char**), true);
+      validate_stack((uint32_t*)args[0], sizeof(char*), true);
+      fd = open((char*)args[0]);
       f->eax = fd;
       break;
+
     case SYS_WRITE:
-      validate_stack(args, 1);
-      if(args[0] == 1) { // STDOUT_FILENO = 1
+      validate_stack(args, sizeof(int), true);
+      fd = (int)(*args++);
+      validate_stack(args, sizeof(void*), true);
+      const void* buffer_k = (const void*)(*args++);
+      validate_stack(args, sizeof(unsigned), true);
+
+
+      if(fd == 1) { // STDOUT_FILENO = 1
         lock_acquire(&filesyscall_lock);
-        putbuf((char*)args[1], args[2]);
+        putbuf((char*)buffer_k, args[0]);
         lock_release(&filesyscall_lock);
       } else {
-        int num_bytes = write(args[0], (void*)args[1], args[2]);
+        int num_bytes = write(fd, buffer_k, args[0]);
         f->eax = num_bytes;
       }
       break;
+
     case SYS_FILESIZE:
-      validate_stack(args, 1);
-      int size = filesize(args[0]);
-      f->eax = size;
+      validate_stack(args, sizeof(int), true);
+      f->eax = filesize((int)args[0]);
       break;
+
     case SYS_READ:
-      validate_stack(args, 1);
-      if (args[0] == 0) { // STDIN_FILENO = 0
+      validate_stack(args, sizeof(int), true);
+      fd = (int)(*args++);
+      validate_stack(args, sizeof(void*), true);
+      void* buffer = (void*)(*args++);
+      validate_stack(args, sizeof(unsigned), true);
+
+      if (fd == 0) { // STDIN_FILENO = 0
         lock_acquire(&filesyscall_lock);
         uint8_t key = input_getc();
         lock_release(&filesyscall_lock);
         f->eax = key;
       } else {
-        int num_bytes = read(args[0], (void*)args[1], args[2]);
+        int num_bytes = read(fd, buffer, args[0]);
         f->eax = num_bytes;
       }
       break;
+
     case SYS_SEEK:
-      validate_stack(args, 1);
-      seek(args[0], args[1]);
+      validate_stack(args, sizeof(int), true);
+      fd = (int)(*args++);
+      validate_stack(args, sizeof(unsigned), true);
+      seek(fd, args[0]);
       break;
+
     case SYS_TELL:
-      validate_stack(args, 1);
+      validate_stack(args, sizeof(int), 1);
       unsigned pos = tell(args[0]);
       f->eax = pos;
       break;
+
     case SYS_CLOSE:
-      validate_stack(args, 1);
+      validate_stack(args, sizeof(int), 1);
       close(args[0]);
       break;
+
     default:
       break;
   }
 }
 
-static void validate_stack(uint32_t* esp, bool allow_rw) {
+static void validate_stack(uint32_t* esp, int bytes, bool allow_rw) {
 #define INVALID_STACK -1
   int i;
   uint8_t* esp8 = (uint8_t*)esp;
   uint32_t* pd_base = thread_current()->pcb->pagedir;
-  for(i = 0; i < 4; i++) {
+  for(i = 0; i < bytes; i++) {
+    if(!esp8) break;
+    if(!is_user_vaddr(esp8)) break;
     uint32_t* pte = lookup_page(pd_base, esp8, false);
     if(!pte) break; /* No page table entry existed. Bad. */
     uint32_t pte_stored = *pte;
@@ -189,11 +223,12 @@ static void validate_stack(uint32_t* esp, bool allow_rw) {
     esp8 += 1;
   }
 
-  if(i == 4) return;
+  if(i == bytes) return;
   printf("%s: exit(%d)\n", thread_current()->pcb->process_name, INVALID_STACK);
   process_exit(INVALID_STACK);
 #undef INVALID_STACK
 }
+
 
 /* creates new file of initial_size bytes, return whether succesful or not */
 static bool create(const char* file, unsigned initial_size) {
