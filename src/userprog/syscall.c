@@ -8,23 +8,48 @@
 #include "threads/vaddr.h"
 #include "threads/pte.h"
 #include "devices/shutdown.h"
+#include "filesys/filesys.h"
+#include "filesys/file.h"
+// #include <stdlib.h>
+#include "threads/malloc.h"
 
 static struct lock filesyscall_lock; 
+static struct lock fd_tab_lock;
 static int next_fd = 3; // minimum fd start with 3
 
+static struct hash fd_table;
+
+typedef struct fd_hash_entry {
+  struct hash_elem hash_elem;
+  int fd;
+  struct file* file_ptr; 
+} fd_hash_entry_t;
 
 static void syscall_handler(struct intr_frame*);
 static void validate_stack(uint32_t* esp, bool allow_rw);
 static bool create(const char* file, unsigned initial_size);
 static bool remove(const char* file);
-static int get_next_fd();
+static int open(const char* file);
+static int write(int fd, const void* buffer, unsigned size);
+static int get_next_fd(void);
 
+static unsigned filesys_hfunc(const struct hash_elem* e, UNUSED void* aux) {
+  struct fd_hash_entry* entry_ptr = hash_entry(e, struct fd_hash_entry, hash_elem);
+  int hash_value = hash_int(entry_ptr->fd);
+  return hash_value;
+}
 
-
+static bool filesys_less(const struct hash_elem* a, const struct hash_elem* b, UNUSED void* aux) {
+  int v1 = filesys_hfunc(a, NULL);
+  int v2 = filesys_hfunc(b, NULL);
+  return (v1 < v2);
+}
 
 void syscall_init(void) { 
   lock_init(&filesyscall_lock);
-  intr_register_int(0x30, 3, INTR_ON, syscall_handler, "syscall"); 
+  lock_init(&fd_tab_lock);
+  intr_register_int(0x30, 3, INTR_ON, syscall_handler, "syscall");
+  hash_init(&fd_table, filesys_hfunc, filesys_less, NULL);
 }
 
 
@@ -69,26 +94,33 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
       break;
     case SYS_CREATE:
       validate_stack(args, 2);
-      bool created = create(args[1], args[2]);
+      bool created = create((char*)args[1], args[2]);
       f->eax = created;
       break;
     case SYS_REMOVE:
       validate_stack(args, 1);
-      bool removed = remove(args[1]);
+      bool removed = remove((char*)args[1]);
       f->eax = removed;
       break;
+    case SYS_OPEN:
+      validate_stack(args, 1);
+      int fd = open((char*)args[0]);
+      f->eax = fd;
+      break;
     case SYS_WRITE:
+      validate_stack(args, 1);
       if(args[0] == STDOUT_FILENO) {
-        validate_stack(args, 1);
         lock_acquire(&filesyscall_lock);
         putbuf((char*)args[1], args[2]);
         lock_release(&filesyscall_lock);
       } else {
         lock_acquire(&filesyscall_lock);
-        // ((char*)args[2], args[3]);
+        int num_bytes = write(args[0], (void*)args[1], args[2]);
         lock_release(&filesyscall_lock);
+        f->eax = num_bytes;
       }
       break;
+    
     default:
       break;
   }
@@ -146,7 +178,52 @@ static bool remove(const char* file) {
   return success;
 }
 
-static int get_next_fd() {
+/* opens file, returns nonnegative file descriptor or -1 if failed to open */
+int open(const char* file) {
+  struct file* file_ptr;
+  int fd;
+  fd_hash_entry_t* fd_entry = (fd_hash_entry_t*) malloc(sizeof(fd_hash_entry_t));
+  if (fd_entry == NULL) {
+    return -1;
+  }
+  lock_acquire(&filesyscall_lock);
+  file_ptr = filesys_open(file);
+  lock_release(&filesyscall_lock);
+  
+  if (file_ptr != NULL) {
+    fd = get_next_fd();
+    // add to hash table
+    fd_entry->fd = fd;
+    fd_entry->file_ptr = file_ptr;
+    lock_acquire(&fd_tab_lock);
+    hash_insert(&fd_table, &fd_entry->hash_elem);
+    lock_release(&fd_tab_lock);
+    return fd;
+  } else {
+    free(fd_entry);
+    return -1;
+  }
+}
+
+/* writes size number of bytes from buffer, return num bytes written */
+int write(int fd, const void* buffer, unsigned size) {
+  fd_hash_entry_t fd_entry_temp;
+  fd_entry_temp.fd = fd;
+  lock_acquire(&fd_tab_lock);
+  struct hash_elem* elem = hash_find(&fd_table, &fd_entry_temp.hash_elem);
+  lock_release(&fd_tab_lock);
+  if (elem == NULL) {
+    return -1;
+  } 
+  fd_hash_entry_t* fd_entry = hash_entry(elem, fd_hash_entry_t, hash_elem);
+  struct file* f = fd_entry->file_ptr;
+  lock_acquire(&filesyscall_lock);
+  int num_bytes_written = file_write(f, buffer, size);
+  lock_release(&filesyscall_lock);
+  return num_bytes_written;
+}
+
+static int get_next_fd(void) {
   lock_acquire(&filesyscall_lock);
   int fd = next_fd;
   next_fd++;
