@@ -30,7 +30,11 @@ static void validate_stack(uint32_t* esp, bool allow_rw);
 static bool create(const char* file, unsigned initial_size);
 static bool remove(const char* file);
 static int open(const char* file);
+static int filesize(int fd);
+int read(int fd, void* buffer, unsigned size);
 static int write(int fd, const void* buffer, unsigned size);
+static struct file* fd_to_fptr(int fd);
+
 static int get_next_fd(void);
 
 static unsigned filesys_hfunc(const struct hash_elem* e, UNUSED void* aux) {
@@ -118,7 +122,17 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
         f->eax = num_bytes;
       }
       break;
-    
+    case SYS_FILESIZE:
+      validate_stack(args, 1);
+      int size = filesize(args[0]);
+      f->eax = size;
+      break;
+    case SYS_READ:
+      validate_stack(args, 1);
+      int num_bytes = read(args[0], (void*)args[1], args[2]);
+      f->eax = num_bytes;
+      break;
+
     default:
       break;
   }
@@ -212,25 +226,52 @@ int open(const char* file) {
   }
 }
 
-/* writes size number of bytes from buffer, return num bytes written */
-int write(int fd, const void* buffer, unsigned size) {
-  
+struct file* fd_to_fptr(int fd) {
   fd_hash_entry_t fd_entry_temp;
   fd_entry_temp.fd = fd;
   lock_acquire(&fd_tab_lock);
   struct hash_elem* elem = hash_find(&fd_table, &fd_entry_temp.hash_elem);
   lock_release(&fd_tab_lock);
   if (elem == NULL) {
-    return -1;
+    return NULL;
   } 
   fd_hash_entry_t* fd_entry = hash_entry(elem, fd_hash_entry_t, hash_elem);
-  struct file* f = fd_entry->file_ptr;
+  return fd_entry->file_ptr;
+}
+
+int filesize(int fd) {
+  struct file* f = fd_to_fptr(fd);
+  if (f == NULL) {
+    return -1;
+  }
+  lock_acquire(&filesyscall_lock);
+  int size = file_length(f);
+  lock_release(&filesyscall_lock);
+  return size;
+}
+
+int read(int fd, void* buffer, unsigned size) {
+  struct file* f = fd_to_fptr(fd);
+  if (f == NULL) {
+    return -1;
+  }
+  lock_acquire(&filesyscall_lock);
+  int num_bytes_read = file_read(f, buffer, size);
+  lock_release(&filesyscall_lock);
+  return num_bytes_read;
+}
+
+/* writes size number of bytes from buffer, return num bytes written */
+int write(int fd, const void* buffer, unsigned size) {
+  struct file* f = fd_to_fptr(fd);
+  if (f == NULL) {
+    return -1;
+  }
   lock_acquire(&filesyscall_lock);
   int num_bytes_written = file_write(f, buffer, size);
   lock_release(&filesyscall_lock);
   return num_bytes_written;
 }
-
 
 
 static int get_next_fd(void) {
