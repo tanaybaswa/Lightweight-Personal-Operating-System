@@ -10,7 +10,7 @@
 #include "devices/shutdown.h"
 #include "filesys/filesys.h"
 #include "filesys/file.h"
-// #include <stdlib.h>
+#include "devices/input.h"
 #include "threads/malloc.h"
 
 static struct lock filesyscall_lock; 
@@ -31,8 +31,11 @@ static bool create(const char* file, unsigned initial_size);
 static bool remove(const char* file);
 static int open(const char* file);
 static int filesize(int fd);
-int read(int fd, void* buffer, unsigned size);
+static int read(int fd, void* buffer, unsigned size);
 static int write(int fd, const void* buffer, unsigned size);
+static void seek(int fd, unsigned position);
+static unsigned tell(int fd);
+static void close(int fd);
 static struct file* fd_to_fptr(int fd);
 
 static int get_next_fd(void);
@@ -129,15 +132,33 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
       break;
     case SYS_READ:
       validate_stack(args, 1);
-      int num_bytes = read(args[0], (void*)args[1], args[2]);
-      f->eax = num_bytes;
+      if (args[0] == 0) { // STDIN_FILENO = 0
+        lock_acquire(&filesyscall_lock);
+        uint8_t key = input_getc();
+        lock_release(&filesyscall_lock);
+        f->eax = key;
+      } else {
+        int num_bytes = read(args[0], (void*)args[1], args[2]);
+        f->eax = num_bytes;
+      }
       break;
-
+    case SYS_SEEK:
+      validate_stack(args, 1);
+      seek(args[0], args[1]);
+      break;
+    case SYS_TELL:
+      validate_stack(args, 1);
+      unsigned pos = tell(args[0]);
+      f->eax = pos;
+      break;
+    case SYS_CLOSE:
+      validate_stack(args, 1);
+      close(args[0]);
+      break;
     default:
       break;
   }
 }
-
 
 static void validate_stack(uint32_t* esp, bool allow_rw) {
 #define INVALID_STACK -1
@@ -273,6 +294,36 @@ int write(int fd, const void* buffer, unsigned size) {
   return num_bytes_written;
 }
 
+void seek(int fd, unsigned position) {
+  struct file* f = fd_to_fptr(fd);
+  if (f == NULL) {
+    return;
+  }
+  lock_acquire(&filesyscall_lock);
+  file_seek(f, position);
+  lock_release(&filesyscall_lock);
+}
+
+unsigned tell (int fd) {
+  struct file* f = fd_to_fptr(fd);
+  if (f == NULL) {
+    return 0;
+  }
+  lock_acquire(&filesyscall_lock);
+  unsigned pos = file_tell(f);
+  lock_release(&filesyscall_lock);
+  return pos;
+}
+
+void close(int fd) {
+  struct file* f = fd_to_fptr(fd);
+  if (f == NULL) {
+    return;
+  }
+  lock_acquire(&filesyscall_lock);
+  file_close(f);
+  lock_release(&filesyscall_lock);
+}
 
 static int get_next_fd(void) {
   lock_acquire(&filesyscall_lock);
