@@ -132,7 +132,8 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
     case SYS_WRITE:
       validate_stack(args, sizeof(int), true);
       fd = (int)(*args++);
-      validate_stack(args, sizeof(void*), true);
+      validate_stack(args, sizeof(void**), true);
+      validate_stack((void*)args[0], sizeof(void*), true);
       const void* buffer_k = (const void*)(*args++);
       validate_stack(args, sizeof(unsigned), true);
 
@@ -155,7 +156,8 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
     case SYS_READ:
       validate_stack(args, sizeof(int), true);
       fd = (int)(*args++);
-      validate_stack(args, sizeof(void*), true);
+      validate_stack(args, sizeof(void**), true);
+      validate_stack((void*)args[0], sizeof(void*), true);
       void* buffer = (void*)(*args++);
       validate_stack(args, sizeof(unsigned), true);
 
