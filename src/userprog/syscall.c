@@ -366,6 +366,17 @@ void close(int fd) {
   lock_acquire(&filesyscall_lock);
   file_close(f);
   lock_release(&filesyscall_lock);
+
+  fd_hash_entry_t fd_entry_temp;
+  fd_entry_temp.fd = fd;
+  lock_acquire(&fd_tab_lock);
+  struct hash_elem* elem = hash_delete(&fd_table, &fd_entry_temp.hash_elem);
+  lock_release(&fd_tab_lock);
+  if (elem == NULL) {
+    return;
+  } 
+  fd_hash_entry_t* fd_entry = hash_entry(elem, fd_hash_entry_t, hash_elem);
+  free(fd_entry);
 }
 
 static int get_next_fd(void) {
