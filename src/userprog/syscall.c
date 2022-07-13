@@ -278,13 +278,17 @@ int open(const char* file) {
   
   lock_acquire(&filesyscall_lock);
   file_ptr = filesys_open(file);
-  if (file_read(file_ptr, &ehdr, sizeof ehdr) != sizeof ehdr ||
-      memcmp(ehdr.e_ident, "\177ELF\1\1\1", 7) || ehdr.e_type != 2 || ehdr.e_machine != 3 ||
-      ehdr.e_version != 1 || ehdr.e_phentsize != sizeof(struct Elf32_Phdr) || ehdr.e_phnum > 1024) {
-    // is not executable
-    fd_entry->executable = false;
-  } else {
-    fd_entry->executable = true;
+  if (file_ptr != NULL) {
+    
+    if (file_read(file_ptr, &ehdr, sizeof ehdr) != sizeof ehdr ||
+        memcmp(ehdr.e_ident, "\177ELF\1\1\1", 7) || ehdr.e_type != 2 || ehdr.e_machine != 3 ||
+        ehdr.e_version != 1 || ehdr.e_phentsize != sizeof(struct Elf32_Phdr) || ehdr.e_phnum > 1024) {
+      // is not executable
+      fd_entry->executable = false;
+    } else {
+      fd_entry->executable = true;
+    }
+    file_seek(file_ptr, 0);
   }
   lock_release(&filesyscall_lock);
   
