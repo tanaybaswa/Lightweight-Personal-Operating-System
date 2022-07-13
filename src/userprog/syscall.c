@@ -30,7 +30,6 @@ static void seek(int fd, unsigned position);
 static unsigned tell(int fd);
 static void close(int fd);
 int sys_sum_to_e(int);
-fd_hash_entry_t* fd_to_hash_entry(int fd);
 
 
 void syscall_init(void) { 
@@ -354,11 +353,6 @@ void close(int fd) {
   file_close(f);
   p->fd_table[fd] = NULL;
   lock_release(&filesyscall_lock);
-
-  lock_acquire(&fd_tab_lock);
-  hash_delete(&fd_table, &fd_entry->hash_elem);
-  lock_release(&fd_tab_lock);
-  free(fd_entry);
 }
 
 int get_next_fd(void) {
