@@ -331,7 +331,7 @@ void seek(int fd, unsigned position) {
   lock_release(&filesyscall_lock);
 }
 
-
+/* Tells position in file. */
 unsigned tell(int fd) {
   if(fd > 63) return 0;
   struct process* p = thread_current()->pcb;
