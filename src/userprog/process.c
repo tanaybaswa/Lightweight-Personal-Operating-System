@@ -22,16 +22,19 @@
 #include "lib/kernel/hash.h"
 #include "lib/kernel/list.h"
 
-static struct semaphore temporary;
 static struct rw_lock pcb_index_lock;
 static struct hash pcb_index;
 static void add_process(struct hash* map, pid_t pid, struct process* process);
+static void add_process_exit(struct hash* map, pid_t pid, int exit_val);
+
 static struct process* get_process(struct hash* map, pid_t pid);
+static int get_process_exit(struct hash* map, pid_t pid);
 static void remove_process(struct hash* map, pid_t pid);
-static void free_process(struct process* process);
+static void free_process(struct process* process, int exit_val);
 static struct process* init_process(void);
 static bool is_flag_on(uint8_t p_flags, uint8_t flag);
-static void set_flag(uint8_t* p_flags, uint8_t, int val);
+static void set_flag(uint8_t* p_flags, uint8_t flag, int val);
+static bool is_process_in(struct hash* map, pid_t pid);
 
 
 static thread_func start_process NO_RETURN;
@@ -51,7 +54,7 @@ void userprog_init(void) {
      so that t->pcb->pagedir is guaranteed to be NULL (the kernel's
      page directory) when t->pcb is assigned, because a timer interrupt
      can come at any time and activate our pagedir */
-  struct process* pcb = init_process();
+  init_process();
   //t->pcb = calloc(sizeof(struct process), 1);
   success = t->pcb != NULL;
 
@@ -74,7 +77,6 @@ pid_t process_execute(const char* argv) {
   tid_t tid;
   struct thread* t = thread_current();
 
-  sema_init(&temporary, 0);
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
   argv_copy = palloc_get_page(0);
@@ -90,14 +92,14 @@ pid_t process_execute(const char* argv) {
   tid = thread_create(file_name, PRI_DEFAULT, start_process, argv_copy);
   if (tid == TID_ERROR) {
     palloc_free_page(argv_copy);
-    return tid;
+    return -1;
   } else {
     struct process* parent = t->pcb;
     sema_down(&parent->blocked);
     if(is_flag_on(parent->flags, CHILD_LOAD_SUCCESS)) {
-      lock_acquire(&parent->children_lock);
-      add_process(&pcb_index, tid, NULL); /* No references to process! */
-      lock_release(&parent->children_lock);
+      add_process(&parent->children, tid, NULL); 
+    } else {
+      tid = -1;
     }
   }
 
@@ -132,7 +134,9 @@ static void start_process(void* argv_) {
     // Avoid race where PCB is freed before t->pcb is set to NULL
     // If this happens, then an unfortuantely timed timer interrupt
     // can try to activate the pagedir, but it is now freed memory
-    free_process(new_pcb);
+#define EXIT_FAILED_LOAD -2
+    free_process(new_pcb, EXIT_FAILED_LOAD);
+#undef EXIT_FAILED_LOAD
   }
 
   /* Clean up. Exit on failure or jump to userspace */
@@ -144,7 +148,7 @@ static void start_process(void* argv_) {
       set_flag(&parent->flags, CHILD_LOAD_SUCCESS, 0);
       sema_up(&parent->blocked);
     }
-    sema_up(&temporary);
+
     rw_lock_release(&pcb_index_lock, true);
     thread_exit();
   }
@@ -161,6 +165,10 @@ static void start_process(void* argv_) {
      arguments on the stack in the form of a `struct intr_frame',
      we just point the stack pointer (%esp) to our stack frame
      and jump to it. */
+
+  char fpu[108];
+  asm volatile("fsave (%0); fninit; fsave (%1); frstor (%0)" : : "g"(&fpu), "g"(&if_.fpu) : "memory");
+  
   asm volatile("movl %0, %%esp; jmp intr_exit" : : "g"(&if_) : "memory");
   NOT_REACHED();
 }
@@ -174,24 +182,44 @@ static void start_process(void* argv_) {
 
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
-int process_wait(pid_t child_pid UNUSED) {
-  sema_down(&temporary);
-  return 0;
+int process_wait(pid_t child_pid) {
+  /* First, find the child process to wait on. */
+  struct process* parent = thread_current()->pcb;
+
+  /* No need to lock, only parent adds to its list. */
+  if(is_process_in(&parent->children, child_pid)) {
+    parent->awaiting_id = child_pid;
+    set_flag(&parent->flags, PROCESS_WAITING, 1);
+    rw_lock_acquire(&pcb_index_lock, true);
+    bool child_alive = is_process_in(&pcb_index, child_pid);
+    rw_lock_release(&pcb_index_lock, true);
+
+    if(child_alive) {
+      sema_down(&parent->blocked);
+    }
+
+    remove_process(&parent->children, child_pid);
+    lock_acquire(&parent->exit_codes_lock);
+    int exit_val = get_process_exit(&parent->exit_codes, child_pid);
+    remove_process(&parent->exit_codes, child_pid);
+    lock_release(&parent->exit_codes_lock);
+    set_flag(&parent->flags, PROCESS_WAITING, 0);
+    return exit_val;
+  }
+  return -1;
 }
 
 /* Free the current process's resources. */
 void process_exit(int code) {
   struct thread* cur = thread_current();
-
   /* If this thread does not have a PCB, don't worry */
   if (cur->pcb == NULL) {
     thread_exit();
     NOT_REACHED();
   }
 
-  free_process(cur->pcb);
+  free_process(cur->pcb, code);
 
-  sema_up(&temporary);
   thread_exit();
 }
 
@@ -210,67 +238,6 @@ void process_activate(void) {
      This does nothing if this is not a user process. */
   tss_update();
 }
-
-/* We load ELF binaries.  The following definitions are taken
-   from the ELF specification, [ELF1], more-or-less verbatim.  */
-
-/* ELF types.  See [ELF1] 1-2. */
-typedef uint32_t Elf32_Word, Elf32_Addr, Elf32_Off;
-typedef uint16_t Elf32_Half;
-
-/* For use with ELF types in printf(). */
-#define PE32Wx PRIx32 /* Print Elf32_Word in hexadecimal. */
-#define PE32Ax PRIx32 /* Print Elf32_Addr in hexadecimal. */
-#define PE32Ox PRIx32 /* Print Elf32_Off in hexadecimal. */
-#define PE32Hx PRIx16 /* Print Elf32_Half in hexadecimal. */
-
-/* Executable header.  See [ELF1] 1-4 to 1-8.
-   This appears at the very beginning of an ELF binary. */
-struct Elf32_Ehdr {
-  unsigned char e_ident[16];
-  Elf32_Half e_type;
-  Elf32_Half e_machine;
-  Elf32_Word e_version;
-  Elf32_Addr e_entry;
-  Elf32_Off e_phoff;
-  Elf32_Off e_shoff;
-  Elf32_Word e_flags;
-  Elf32_Half e_ehsize;
-  Elf32_Half e_phentsize;
-  Elf32_Half e_phnum;
-  Elf32_Half e_shentsize;
-  Elf32_Half e_shnum;
-  Elf32_Half e_shstrndx;
-};
-
-/* Program header.  See [ELF1] 2-2 to 2-4.
-   There are e_phnum of these, starting at file offset e_phoff
-   (see [ELF1] 1-6). */
-struct Elf32_Phdr {
-  Elf32_Word p_type;
-  Elf32_Off p_offset;
-  Elf32_Addr p_vaddr;
-  Elf32_Addr p_paddr;
-  Elf32_Word p_filesz;
-  Elf32_Word p_memsz;
-  Elf32_Word p_flags;
-  Elf32_Word p_align;
-};
-
-/* Values for p_type.  See [ELF1] 2-3. */
-#define PT_NULL 0           /* Ignore. */
-#define PT_LOAD 1           /* Loadable segment. */
-#define PT_DYNAMIC 2        /* Dynamic linking info. */
-#define PT_INTERP 3         /* Name of dynamic loader. */
-#define PT_NOTE 4           /* Auxiliary info. */
-#define PT_SHLIB 5          /* Reserved. */
-#define PT_PHDR 6           /* Program header table. */
-#define PT_STACK 0x6474e551 /* Stack segment. */
-
-/* Flags for p_flags.  See [ELF3] 2-3 and 2-4. */
-#define PF_X 1 /* Executable. */
-#define PF_W 2 /* Writable. */
-#define PF_R 4 /* Readable. */
 
 static bool setup_stack(void** esp, char* argv);
 static bool validate_segment(const struct Elf32_Phdr*, struct file*);
@@ -343,7 +310,7 @@ bool load(char* argv, void (**eip)(void), void** esp) {
         goto done;
       case PT_LOAD:
         if (validate_segment(&phdr, file)) {
-          bool writable = (phdr.p_flags & PF_W) != 0;
+          bool writable = (phdr.p_flags & PFLAG_W) != 0;
           uint32_t file_page = phdr.p_offset & ~PGMASK;
           uint32_t mem_page = phdr.p_vaddr & ~PGMASK;
           uint32_t page_offset = phdr.p_vaddr & PGMASK;
@@ -523,10 +490,16 @@ static bool setup_stack(void** esp, char* argv) {
       sp -= 1;
 
       /* Allign sp on 16-byte boundary. */
-      while(*((uint32_t*)(&sp)) % 0x10 != 0) {
+      while(((uint32_t)sp - (sizeof(uint32_t*) * (argc + 3))) % 0x10 != 0) {
         memset(sp, 0x0, sizeof(char));
         sp -= 1;
       }
+
+      /* We add num. of argc + 1 + &argv + argc
+       *    ie. argc + 3 */
+
+      //int align_count = argc + 4;
+      //if(*((uint32_t*)(&sp)) - align_count % 0x10 != 0
 
       /* Copy addresses of passed in arguments to stack. */
       for(int i = argc; i >= 0; i--) {
@@ -635,12 +608,33 @@ static struct process* get_process(struct hash* map, pid_t pid) {
   return found->process;
 }
 
+static int get_process_exit(struct hash* map, pid_t pid) {
+  struct process_h temp;
+  temp.pid = pid;
+  struct hash_elem* e = hash_find(map, &temp.hash_elem);
+  if(!e) {
+#define EXIT_CODE_NOT_FOUND -3
+    return EXIT_CODE_NOT_FOUND;
+#undef EXIT_CODE_NOT_FOUND
+  }
+  struct process_h* found = hash_entry(e, struct process_h, hash_elem);
+  return found->exit_val;
+}
+
+
+
 
 static void add_process(struct hash* map, pid_t pid, struct process* process) {
   struct process_h* temp = malloc(sizeof(struct process_h));
   temp->pid = pid;
   temp->process = process;
-  /* TODO: Add check to assure that PID hasn't already been added? */
+  hash_insert(map, &temp->hash_elem);
+}
+
+static void add_process_exit(struct hash* map, pid_t pid, int exit_val) {
+  struct process_h* temp = malloc(sizeof(struct process_h));
+  temp->pid = pid;
+  temp->exit_val = exit_val;
   hash_insert(map, &temp->hash_elem);
 }
 
@@ -676,7 +670,6 @@ static struct process* init_process(void) {
   new_process->main_thread = thread;
   strlcpy(new_process->process_name, thread->name, sizeof thread->name);
   new_process->flags = NO_FLAGS;
-  lock_init(&new_process->children_lock);
   lock_init(&new_process->exit_codes_lock);
   sema_init(&new_process->blocked, 0);
   hash_init(&new_process->children, pcb_hash, pcb_less, NULL);
@@ -689,10 +682,25 @@ static struct process* init_process(void) {
   return new_process;
 }
 
-static void free_process(struct process* process) {
+static void free_process(struct process* process, int exit_val) {
   struct thread* thread = thread_current();
 
   rw_lock_acquire(&pcb_index_lock, false);
+
+  /* Get parent. */
+  pid_t parent_pid = thread->parent_tid;
+  struct process* parent = get_process(&pcb_index, parent_pid);
+  if(parent) {
+    /* Not necessary due to pcb_index_lock. But for good measure. */
+    lock_acquire(&parent->exit_codes_lock);
+    add_process_exit(&parent->exit_codes, thread->tid, exit_val);
+    lock_release(&parent->exit_codes_lock);
+
+    if(is_flag_on(parent->flags, PROCESS_WAITING) && parent->awaiting_id == thread->tid) {
+      sema_up(&parent->blocked);
+    } 
+  }
+
   remove_process(&pcb_index, thread->tid);
   rw_lock_release(&pcb_index_lock, false);
 
