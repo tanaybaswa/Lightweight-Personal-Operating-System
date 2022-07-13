@@ -8,6 +8,7 @@
 #include "userprog/gdt.h"
 #include "userprog/pagedir.h"
 #include "userprog/tss.h"
+#include "userprog/syscall.h"
 #include "filesys/directory.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
@@ -22,12 +23,11 @@
 #include "lib/kernel/hash.h"
 #include "lib/kernel/list.h"
 
-static struct rw_lock pcb_index_lock;
-static struct hash pcb_index;
+
 static void add_process(struct hash* map, pid_t pid, struct process* process);
 static void add_process_exit(struct hash* map, pid_t pid, int exit_val);
 
-static struct process* get_process(struct hash* map, pid_t pid);
+struct process* get_process(struct hash* map, pid_t pid);
 static int get_process_exit(struct hash* map, pid_t pid);
 static void remove_process(struct hash* map, pid_t pid);
 static void free_process(struct process* process, int exit_val);
@@ -331,11 +331,17 @@ bool load(char* argv, void (**eip)(void), void** esp) {
   process_activate();
 
   /* Open executable file. */
+  int fd = get_next_fd();
+  struct process* p = t->pcb;
   file = filesys_open(file_name);
+  
   if (file == NULL) {
     printf("load: %s: open failed\n", file_name);
     goto done;
   }
+  file_deny_write(file);
+  p->fd_table[fd] = file;
+
 
   /* Read and verify executable header. */
   if (file_read(file, &ehdr, sizeof ehdr) != sizeof ehdr ||
@@ -406,7 +412,6 @@ bool load(char* argv, void (**eip)(void), void** esp) {
 
 done:
   /* We arrive here whether the load is successful or not. */
-  file_close(file);
   return success;
 }
 
@@ -658,7 +663,7 @@ static unsigned pcb_hash(const struct hash_elem* e, UNUSED void* aux) {
 }
 
 
-static struct process* get_process(struct hash* map, pid_t pid) {
+struct process* get_process(struct hash* map, pid_t pid) {
   struct process_h temp;
   temp.pid = pid;
   struct hash_elem* e = hash_find(map, &temp.hash_elem);
@@ -735,6 +740,10 @@ static struct process* init_process(void) {
   sema_init(&new_process->blocked, 0);
   hash_init(&new_process->children, pcb_hash, pcb_less, NULL);
   hash_init(&new_process->exit_codes, pcb_hash, pcb_less, NULL);
+#define MAX_OPEN 64
+  new_process->fd_table = calloc(MAX_OPEN, sizeof(struct file*));
+#undef MAX_OPEN
+  new_process->fd_count = 3;
 
   rw_lock_acquire(&pcb_index_lock, false);
   add_process(&pcb_index, thread->tid, new_process);
