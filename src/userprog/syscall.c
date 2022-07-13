@@ -1,5 +1,6 @@
 #include "userprog/syscall.h"
 #include <stdio.h>
+#include <string.h>
 #include <syscall-nr.h>
 #include "threads/interrupt.h"
 #include "threads/thread.h"
@@ -12,20 +13,10 @@
 #include "filesys/file.h"
 #include "devices/input.h"
 #include "threads/malloc.h"
-#include <string.h>
+#include "threads/synch.h"
 
-static struct lock filesyscall_lock; 
-static struct lock fd_tab_lock;
-static int next_fd = 3; // minimum fd start with 3
+struct lock filesyscall_lock; 
 
-static struct hash fd_table;
-
-typedef struct fd_hash_entry {
-  struct hash_elem hash_elem;
-  int fd;
-  struct file* file_ptr;
-  bool executable; 
-} fd_hash_entry_t;
 
 static void syscall_handler(struct intr_frame*);
 static void validate_stack(uint32_t* esp, int bytes, bool allow_rw);
@@ -38,29 +29,13 @@ static int write(int fd, const void* buffer, unsigned size);
 static void seek(int fd, unsigned position);
 static unsigned tell(int fd);
 static void close(int fd);
-static struct file* fd_to_fptr(int fd);
 int sys_sum_to_e(int);
 fd_hash_entry_t* fd_to_hash_entry(int fd);
 
-static int get_next_fd(void);
-
-static unsigned filesys_hfunc(const struct hash_elem* e, UNUSED void* aux) {
-  struct fd_hash_entry* entry_ptr = hash_entry(e, struct fd_hash_entry, hash_elem);
-  int hash_value = hash_int(entry_ptr->fd);
-  return hash_value;
-}
-
-static bool filesys_less(const struct hash_elem* a, const struct hash_elem* b, UNUSED void* aux) {
-  int v1 = filesys_hfunc(a, NULL);
-  int v2 = filesys_hfunc(b, NULL);
-  return (v1 < v2);
-}
 
 void syscall_init(void) { 
   lock_init(&filesyscall_lock);
-  lock_init(&fd_tab_lock);
   intr_register_int(0x30, 3, INTR_ON, syscall_handler, "syscall");
-  hash_init(&fd_table, filesys_hfunc, filesys_less, NULL);
 }
 
 
@@ -78,9 +53,10 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
 
   /* Validate the stack pointer (switch argument). */
   validate_stack(args, 4, true);
-
+  
 
   int fd;
+  int num_bytes;
   switch(*args++) {
     case SYS_EXIT:
       validate_stack(args, sizeof(int), true);
@@ -128,7 +104,7 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
     case SYS_OPEN:
       validate_stack(args, sizeof(char**), true);
       validate_stack((uint32_t*)args[0], sizeof(char*), true);
-      fd = open((char*)args[0]);
+      fd = open((char*)args[0]); // Permissions not implemented.
       f->eax = fd;
       break;
 
@@ -139,16 +115,8 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
       validate_stack((void*)args[0], sizeof(void*), true);
       const void* buffer_k = (const void*)(*args++);
       validate_stack(args, sizeof(unsigned), true);
-
-
-      if(fd == 1) { // STDOUT_FILENO = 1
-        lock_acquire(&filesyscall_lock);
-        putbuf((char*)buffer_k, args[0]);
-        lock_release(&filesyscall_lock);
-      } else {
-        int num_bytes = write(fd, buffer_k, args[0]);
-        f->eax = num_bytes;
-      }
+      num_bytes = write(fd, buffer_k, args[0]);
+      f->eax = num_bytes;
       break;
 
     case SYS_FILESIZE:
@@ -163,16 +131,8 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
       validate_stack((void*)args[0], sizeof(void*), true);
       void* buffer = (void*)(*args++);
       validate_stack(args, sizeof(unsigned), true);
-
-      if (fd == 0) { // STDIN_FILENO = 0
-        lock_acquire(&filesyscall_lock);
-        uint8_t key = input_getc();
-        lock_release(&filesyscall_lock);
-        f->eax = key;
-      } else {
-        int num_bytes = read(fd, buffer, args[0]);
-        f->eax = num_bytes;
-      }
+      num_bytes = read(fd, buffer, args[0]);
+      f->eax = num_bytes;
       break;
 
     case SYS_SEEK:
@@ -190,6 +150,7 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
 
     case SYS_CLOSE:
       validate_stack(args, sizeof(int), 1);
+      if((int)args[0] < 3) break;
       close(args[0]);
       break;
 
@@ -260,97 +221,61 @@ static bool remove(const char* file) {
   return success;
 }
 
+
 /* opens file, returns nonnegative file descriptor or -1 if failed to open */
 int open(const char* file) {
-  struct file* file_ptr;
-  int fd;
-  struct Elf32_Ehdr ehdr;
-  if (file == NULL) {
-    return -1;
-  } 
-  if (!is_user_vaddr(file)) {
-    return -1;
-  }
-  fd_hash_entry_t* fd_entry = (fd_hash_entry_t*) malloc(sizeof(fd_hash_entry_t));
-  if (fd_entry == NULL) {
-    return -1;
-  }
-  
+  struct process* p = thread_current()->pcb;
+  int fd = get_next_fd();
   lock_acquire(&filesyscall_lock);
-  file_ptr = filesys_open(file);
-  if (file_ptr != NULL) {
-    
-    if (file_read(file_ptr, &ehdr, sizeof ehdr) != sizeof ehdr ||
-        memcmp(ehdr.e_ident, "\177ELF\1\1\1", 7) || ehdr.e_type != 2 || ehdr.e_machine != 3 ||
-        ehdr.e_version != 1 || ehdr.e_phentsize != sizeof(struct Elf32_Phdr) || ehdr.e_phnum > 1024) {
-      // is not executable
-      fd_entry->executable = false;
-    } else {
-      fd_entry->executable = true;
-    }
-    file_seek(file_ptr, 0);
-  }
-  lock_release(&filesyscall_lock);
-  
-
-  if (file_ptr != NULL) {
-    fd = get_next_fd();
-    // add to hash table
-    fd_entry->fd = fd;
-    fd_entry->file_ptr = file_ptr;
-    lock_acquire(&fd_tab_lock);
-    hash_insert(&fd_table, &fd_entry->hash_elem);
-    lock_release(&fd_tab_lock);
-    return fd;
-  } else {
-    free(fd_entry);
+  struct file* f = filesys_open(file);
+  if(!f) {
+    lock_release(&filesyscall_lock);
     return -1;
-  }
+  };
+
+  
+  p->fd_table[fd] = f;
+  lock_release(&filesyscall_lock);
+  return fd;
 }
 
-fd_hash_entry_t* fd_to_hash_entry(int fd) {
-  fd_hash_entry_t fd_entry_temp;
-  fd_entry_temp.fd = fd;
-  lock_acquire(&fd_tab_lock);
-  struct hash_elem* elem = hash_find(&fd_table, &fd_entry_temp.hash_elem);
-  lock_release(&fd_tab_lock);
-  if (elem == NULL) {
-    return NULL;
-  } 
-  fd_hash_entry_t* fd_entry = hash_entry(elem, fd_hash_entry_t, hash_elem);
-  return fd_entry;
-}
-
-struct file* fd_to_fptr(int fd) {
-  fd_hash_entry_t* fd_entry = fd_to_hash_entry(fd);
-  if (fd_entry == NULL) {
-    return NULL;
-  } 
-  return fd_entry->file_ptr;
-}
 
 int filesize(int fd) {
-  struct file* f = fd_to_fptr(fd);
-  if (f == NULL) {
-    return -1;
-  }
+  if(fd < 3 || fd > 63) return -1;
+  struct process* p = thread_current()->pcb;
+  struct file* f = p->fd_table[fd];
+  if(!f) return -1;
   lock_acquire(&filesyscall_lock);
   int size = file_length(f);
   lock_release(&filesyscall_lock);
   return size;
 }
 
+
 int read(int fd, void* buffer, unsigned size) {
-  struct file* f = fd_to_fptr(fd);
-  if (f == NULL) {
-    return -1;
-  }
-  fd_hash_entry_t* hash_entry = fd_to_hash_entry(fd);
-  if (hash_entry == NULL) {
-    return -1;
-  }
-  if (hash_entry->executable == true) {
-    file_deny_write(f);
+  if(fd > 63) return -1;
+  struct process* p = thread_current()->pcb;
+  struct file* f = p->fd_table[fd];
+  if(!f && fd > 2) return -1;
+  
+
+  if(fd < 3) {
+    int key = -1;
+    lock_acquire(&filesyscall_lock);
+    switch(fd) {
+      case 0:
+        /* STDIN */
+        key = input_getc();
+        break;
+      case 1:
+        /* STDOUT */
+        break;
+      case 2:
+        /* STDERR */
+        break;
+    }
+    lock_release(&filesyscall_lock);
+    return key;
   }
   lock_acquire(&filesyscall_lock);
   int num_bytes_read = file_read(f, buffer, size);
@@ -358,53 +283,76 @@ int read(int fd, void* buffer, unsigned size) {
   return num_bytes_read;
 }
 
+
 /* writes size number of bytes from buffer, return num bytes written */
 int write(int fd, const void* buffer, unsigned size) {
-  struct file* f = fd_to_fptr(fd);
-  if (f == NULL) {
-    return -1;
+  if(fd > 63) return -1;
+  struct process* p = thread_current()->pcb;
+  struct file* f = p->fd_table[fd];
+  if(!f && fd > 2) return -1;
+
+  if(fd < 3) {
+    int key = -1;
+    lock_acquire(&filesyscall_lock);
+    switch(fd) {
+      case 0:
+        /* STDIN */
+        break;
+      case 1:
+        /* STDOUT */
+        putbuf(buffer, size);
+        key = size;
+        break;
+      case 2:
+        /* STDERR */
+        putbuf(buffer, size);
+        key = size;
+        break;
+    }
+    lock_release(&filesyscall_lock);
+    return key;
   }
+
   lock_acquire(&filesyscall_lock);
   int num_bytes_written = file_write(f, buffer, size);
   lock_release(&filesyscall_lock);
   return num_bytes_written;
 }
 
+
 void seek(int fd, unsigned position) {
-  struct file* f = fd_to_fptr(fd);
-  if (f == NULL) {
-    return;
-  }
+  if(fd < 3 || fd > 63) return;
+  struct process* p = thread_current()->pcb;
+  struct file* f = p->fd_table[fd];
+  if(!f) return;
+
   lock_acquire(&filesyscall_lock);
   file_seek(f, position);
   lock_release(&filesyscall_lock);
 }
 
-unsigned tell (int fd) {
-  struct file* f = fd_to_fptr(fd);
-  if (f == NULL) {
-    return 0;
-  }
+/* Tells position in file. */
+unsigned tell(int fd) {
+  if(fd > 63) return 0;
+  struct process* p = thread_current()->pcb;
+  struct file* f = p->fd_table[fd];
+  if(!f) return 0;
+
   lock_acquire(&filesyscall_lock);
   unsigned pos = file_tell(f);
   lock_release(&filesyscall_lock);
   return pos;
 }
 
+
 void close(int fd) {
-  struct file* f = fd_to_fptr(fd);
-  if (f == NULL) {
-    return;
-  }
-  fd_hash_entry_t* fd_entry = fd_to_hash_entry(fd);
-  if (fd_entry == NULL) {
-    return;
-  }
-  if (fd_entry->executable == true) {
-    file_allow_write(f);
-  }
+  if(fd < 3 || fd > 63) return;
+  struct process* p = thread_current()->pcb;
+  struct file* f = p->fd_table[fd];
+  if(!f) return;
   lock_acquire(&filesyscall_lock);
   file_close(f);
+  p->fd_table[fd] = NULL;
   lock_release(&filesyscall_lock);
 
   lock_acquire(&fd_tab_lock);
@@ -413,11 +361,13 @@ void close(int fd) {
   free(fd_entry);
 }
 
-static int get_next_fd(void) {
-  lock_acquire(&filesyscall_lock);
-  int fd = next_fd;
-  next_fd++;
-  lock_release(&filesyscall_lock);
-  return fd;
+int get_next_fd(void) {
+  struct process* p = thread_current()->pcb;
+#define MAX_OPEN 64
+  int start;
+  for(start = 3; start < 64; start++) {
+    if(p->fd_table[start] == NULL) break;
+  }
+  return start;
+#undef MAX_OPEN
 }
-

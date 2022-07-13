@@ -4,6 +4,7 @@
 #include "threads/thread.h"
 #include "threads/synch.h"
 #include "lib/kernel/hash.h"
+#include "lib/kernel/list.h"
 #include <stdint.h>
 
 /* We load ELF binaries.  The following definitions are taken
@@ -92,6 +93,8 @@ struct process {
   char process_name[16];       /* Name of the main thread */
   struct thread* main_thread;  /* Pointer to main thread */
 
+  struct file** fd_table;        /* File descriptor table of open files. */
+  int fd_count;                      /* File descriptor count. */ 
   struct hash children;        /* Hash of pid_t/struct process*  */
   struct hash exit_codes;      /* Hash of pid_t/int. */
   struct lock exit_codes_lock; /* Lock used for exit_codes hash. */
@@ -100,6 +103,11 @@ struct process {
   uint8_t flags;
   pid_t awaiting_id;
 };
+
+struct rw_lock pcb_index_lock;
+struct hash pcb_index;
+
+struct process* get_process(struct hash* map, pid_t pid);
 
 enum process_flags {
   NO_FLAGS = 0,
