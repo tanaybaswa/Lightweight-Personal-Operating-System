@@ -12,6 +12,7 @@
 #include "filesys/file.h"
 #include "devices/input.h"
 #include "threads/malloc.h"
+#include <string.h>
 
 static struct lock filesyscall_lock; 
 static struct lock fd_tab_lock;
@@ -22,7 +23,8 @@ static struct hash fd_table;
 typedef struct fd_hash_entry {
   struct hash_elem hash_elem;
   int fd;
-  struct file* file_ptr; 
+  struct file* file_ptr;
+  bool executable; 
 } fd_hash_entry_t;
 
 static void syscall_handler(struct intr_frame*);
@@ -38,6 +40,7 @@ static unsigned tell(int fd);
 static void close(int fd);
 static struct file* fd_to_fptr(int fd);
 int sys_sum_to_e(int);
+fd_hash_entry_t* fd_to_hash_entry(int fd);
 
 static int get_next_fd(void);
 
@@ -261,6 +264,7 @@ static bool remove(const char* file) {
 int open(const char* file) {
   struct file* file_ptr;
   int fd;
+  struct Elf32_Ehdr ehdr;
   if (file == NULL) {
     return -1;
   } 
@@ -271,10 +275,20 @@ int open(const char* file) {
   if (fd_entry == NULL) {
     return -1;
   }
+  
   lock_acquire(&filesyscall_lock);
   file_ptr = filesys_open(file);
+  if (file_read(file_ptr, &ehdr, sizeof ehdr) != sizeof ehdr ||
+      memcmp(ehdr.e_ident, "\177ELF\1\1\1", 7) || ehdr.e_type != 2 || ehdr.e_machine != 3 ||
+      ehdr.e_version != 1 || ehdr.e_phentsize != sizeof(struct Elf32_Phdr) || ehdr.e_phnum > 1024) {
+    // is not executable
+    fd_entry->executable = false;
+  } else {
+    fd_entry->executable = true;
+  }
   lock_release(&filesyscall_lock);
   
+
   if (file_ptr != NULL) {
     fd = get_next_fd();
     // add to hash table
@@ -290,7 +304,7 @@ int open(const char* file) {
   }
 }
 
-struct file* fd_to_fptr(int fd) {
+fd_hash_entry_t* fd_to_hash_entry(int fd) {
   fd_hash_entry_t fd_entry_temp;
   fd_entry_temp.fd = fd;
   lock_acquire(&fd_tab_lock);
@@ -300,6 +314,14 @@ struct file* fd_to_fptr(int fd) {
     return NULL;
   } 
   fd_hash_entry_t* fd_entry = hash_entry(elem, fd_hash_entry_t, hash_elem);
+  return fd_entry;
+}
+
+struct file* fd_to_fptr(int fd) {
+  fd_hash_entry_t* fd_entry = fd_to_hash_entry(fd);
+  if (fd_entry == NULL) {
+    return NULL;
+  } 
   return fd_entry->file_ptr;
 }
 
@@ -318,6 +340,13 @@ int read(int fd, void* buffer, unsigned size) {
   struct file* f = fd_to_fptr(fd);
   if (f == NULL) {
     return -1;
+  }
+  fd_hash_entry_t* hash_entry = fd_to_hash_entry(fd);
+  if (hash_entry == NULL) {
+    return -1;
+  }
+  if (hash_entry->executable == true) {
+    file_deny_write(f);
   }
   lock_acquire(&filesyscall_lock);
   int num_bytes_read = file_read(f, buffer, size);
@@ -363,19 +392,20 @@ void close(int fd) {
   if (f == NULL) {
     return;
   }
+  fd_hash_entry_t* fd_entry = fd_to_hash_entry(fd);
+  if (fd_entry == NULL) {
+    return;
+  }
+  if (fd_entry->executable == true) {
+    file_allow_write(f);
+  }
   lock_acquire(&filesyscall_lock);
   file_close(f);
   lock_release(&filesyscall_lock);
 
-  fd_hash_entry_t fd_entry_temp;
-  fd_entry_temp.fd = fd;
   lock_acquire(&fd_tab_lock);
-  struct hash_elem* elem = hash_delete(&fd_table, &fd_entry_temp.hash_elem);
+  hash_delete(&fd_table, &fd_entry->hash_elem);
   lock_release(&fd_tab_lock);
-  if (elem == NULL) {
-    return;
-  } 
-  fd_hash_entry_t* fd_entry = hash_entry(elem, fd_hash_entry_t, hash_elem);
   free(fd_entry);
 }
 
