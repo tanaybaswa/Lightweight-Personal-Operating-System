@@ -723,6 +723,9 @@ static void free_process(struct process* process, int exit_val) {
   /* Lock not necessary because removed from PCB_INDEX. */
   hash_destroy(&process->children, pcb_destructor);
   hash_destroy(&process->exit_codes, pcb_destructor);
+  struct file* exe_file = process->fd_table[3]; // Always the running executable.
+  file_close(exe_file);
+  free(process->fd_table);
 
   thread->pcb = NULL;
   free(process);
