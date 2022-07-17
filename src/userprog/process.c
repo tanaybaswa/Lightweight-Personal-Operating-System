@@ -8,6 +8,7 @@
 #include "userprog/gdt.h"
 #include "userprog/pagedir.h"
 #include "userprog/tss.h"
+#include "userprog/syscall.h"
 #include "filesys/directory.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
@@ -19,6 +20,20 @@
 #include "threads/synch.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "lib/kernel/hash.h"
+#include "lib/kernel/list.h"
+
+static void add_process(struct hash* map, pid_t pid, struct process* process);
+static void add_process_exit(struct hash* map, pid_t pid, int exit_val);
+
+struct process* get_process(struct hash* map, pid_t pid);
+static int get_process_exit(struct hash* map, pid_t pid);
+static void remove_process(struct hash* map, pid_t pid);
+static void free_process(struct process* process, int exit_val);
+static struct process* init_process(void);
+static bool is_flag_on(uint8_t p_flags, uint8_t flag);
+static void set_flag(uint8_t* p_flags, uint8_t flag, int val);
+static bool is_process_in(struct hash* map, pid_t pid);
 
 static struct semaphore temporary;
 static thread_func start_process NO_RETURN;
@@ -281,11 +296,16 @@ bool load(const char* file_name, void (**eip)(void), void** esp) {
   process_activate();
 
   /* Open executable file. */
+  int fd = get_next_fd();
+  struct process* p = t->pcb;
   file = filesys_open(file_name);
+
   if (file == NULL) {
     printf("load: %s: open failed\n", file_name);
     goto done;
   }
+  file_deny_write(file);
+  p->fd_table[fd] = file;
 
   /* Read and verify executable header. */
   if (file_read(file, &ehdr, sizeof ehdr) != sizeof ehdr ||
@@ -321,7 +341,7 @@ bool load(const char* file_name, void (**eip)(void), void** esp) {
         goto done;
       case PT_LOAD:
         if (validate_segment(&phdr, file)) {
-          bool writable = (phdr.p_flags & PF_W) != 0;
+          bool writable = (phdr.p_flags & PFLAG_W) != 0;
           uint32_t file_page = phdr.p_offset & ~PGMASK;
           uint32_t mem_page = phdr.p_vaddr & ~PGMASK;
           uint32_t page_offset = phdr.p_vaddr & PGMASK;
@@ -356,7 +376,6 @@ bool load(const char* file_name, void (**eip)(void), void** esp) {
 
 done:
   /* We arrive here whether the load is successful or not. */
-  file_close(file);
   return success;
 }
 
@@ -501,3 +520,190 @@ bool is_main_thread(struct thread* t, struct process* p) { return p->main_thread
 
 /* Gets the PID of a process */
 pid_t get_pid(struct process* p) { return (pid_t)p->main_thread->tid; }
+
+/* Counts words in a single string. */
+static int count_words(char* source) {
+  int count = 0;
+  char* start = source;
+  char* curr = source;
+
+  while (true) {
+    while (*start != '\0' && *start == ' ')
+      start++;
+    curr = start;
+    while (*curr != '\0' && *curr != ' ')
+      curr++;
+    int len = curr - start;
+    if (len == 0)
+      break;
+    count++;
+    start = curr;
+  }
+  return count;
+}
+
+/* Functions for for adding/removing/getting from a pcb HASH. */
+
+static bool pcb_less(const struct hash_elem* a, const struct hash_elem* b, void* aux);
+static unsigned pcb_hash(const struct hash_elem* e, void* aux);
+static void pcb_destructor(struct hash_elem* e, void* aux);
+
+bool init_pcb_index(void) {
+  rw_lock_init(&pcb_index_lock);
+  return hash_init(&pcb_index, pcb_hash, pcb_less, NULL);
+}
+
+static bool pcb_less(const struct hash_elem* a, const struct hash_elem* b, UNUSED void* aux) {
+  struct process_h* pa = hash_entry(a, struct process_h, hash_elem);
+  struct process_h* pb = hash_entry(b, struct process_h, hash_elem);
+  return pa->pid - pb->pid;
+}
+
+static unsigned pcb_hash(const struct hash_elem* e, UNUSED void* aux) {
+  struct process_h* p = hash_entry(e, struct process_h, hash_elem);
+  return p->pid;
+}
+
+struct process* get_process(struct hash* map, pid_t pid) {
+  struct process_h temp;
+  temp.pid = pid;
+  struct hash_elem* e = hash_find(map, &temp.hash_elem);
+  if (!e) {
+    return NULL;
+  }
+  struct process_h* found = hash_entry(e, struct process_h, hash_elem);
+  return found->process;
+}
+
+static int get_process_exit(struct hash* map, pid_t pid) {
+  struct process_h temp;
+  temp.pid = pid;
+  struct hash_elem* e = hash_find(map, &temp.hash_elem);
+  if (!e) {
+#define EXIT_CODE_NOT_FOUND -3
+    return EXIT_CODE_NOT_FOUND;
+#undef EXIT_CODE_NOT_FOUND
+  }
+  struct process_h* found = hash_entry(e, struct process_h, hash_elem);
+  return found->exit_val;
+}
+
+static void add_process(struct hash* map, pid_t pid, struct process* process) {
+  struct process_h* temp = malloc(sizeof(struct process_h));
+  temp->pid = pid;
+  temp->process = process;
+  hash_insert(map, &temp->hash_elem);
+}
+
+static void add_process_exit(struct hash* map, pid_t pid, int exit_val) {
+  struct process_h* temp = malloc(sizeof(struct process_h));
+  temp->pid = pid;
+  temp->exit_val = exit_val;
+  hash_insert(map, &temp->hash_elem);
+}
+
+static bool is_process_in(struct hash* map, pid_t pid) {
+  struct process_h temp;
+  temp.pid = pid;
+  struct hash_elem* e = hash_find(map, &temp.hash_elem);
+  if (e)
+    return true;
+  return false;
+}
+
+static void remove_process(struct hash* map, pid_t pid) {
+  struct process_h temp;
+  temp.pid = pid;
+  struct hash_elem* e = hash_delete(map, &temp.hash_elem);
+  struct process_h* p = hash_entry(e, struct process_h, hash_elem);
+  free(p);
+}
+
+/* Functions for initializing and freeing a process. */
+
+static struct process* init_process(void) {
+  struct thread* thread = thread_current();
+  struct process* new_process = NULL;
+
+  /* Always use calloc to insure pcb->pagedir is NULL! */
+  new_process = calloc(sizeof(struct process), 1);
+  if (!new_process)
+    return NULL;
+
+  new_process->pagedir = NULL;
+  thread->pcb = new_process;
+  new_process->main_thread = thread;
+  strlcpy(new_process->process_name, thread->name, sizeof thread->name);
+  new_process->flags = NO_FLAGS;
+  lock_init(&new_process->exit_codes_lock);
+  sema_init(&new_process->blocked, 0);
+  hash_init(&new_process->children, pcb_hash, pcb_less, NULL);
+  hash_init(&new_process->exit_codes, pcb_hash, pcb_less, NULL);
+#define MAX_OPEN 64
+  new_process->fd_table = calloc(MAX_OPEN, sizeof(struct file*));
+#undef MAX_OPEN
+  new_process->fd_count = 3;
+
+  rw_lock_acquire(&pcb_index_lock, false);
+  add_process(&pcb_index, thread->tid, new_process);
+  rw_lock_release(&pcb_index_lock, false);
+
+  return new_process;
+}
+
+static void free_process(struct process* process, int exit_val) {
+  struct thread* thread = thread_current();
+
+  rw_lock_acquire(&pcb_index_lock, false);
+
+  /* Get parent. */
+  pid_t parent_pid = thread->parent_tid;
+  struct process* parent = get_process(&pcb_index, parent_pid);
+  if (parent) {
+    /* Not necessary due to pcb_index_lock. But for good measure. */
+    lock_acquire(&parent->exit_codes_lock);
+    add_process_exit(&parent->exit_codes, thread->tid, exit_val);
+    lock_release(&parent->exit_codes_lock);
+
+    if (is_flag_on(parent->flags, PROCESS_WAITING) && parent->awaiting_id == thread->tid) {
+      sema_up(&parent->blocked);
+    }
+  }
+
+  remove_process(&pcb_index, thread->tid);
+  rw_lock_release(&pcb_index_lock, false);
+
+  uint32_t* pd = process->pagedir;
+  if (pd != NULL) {
+    process->pagedir = NULL;
+    pagedir_activate(NULL);
+    pagedir_destroy(pd);
+  }
+
+  /* Lock not necessary because removed from PCB_INDEX. */
+  hash_destroy(&process->children, pcb_destructor);
+  hash_destroy(&process->exit_codes, pcb_destructor);
+  struct file* exe_file = process->fd_table[3]; // Always the running executable.
+  file_close(exe_file);
+  free(process->fd_table);
+
+  thread->pcb = NULL;
+  free(process);
+}
+
+static void pcb_destructor(struct hash_elem* e, UNUSED void* aux) {
+  struct process_h* p = hash_entry(e, struct process_h, hash_elem);
+  free(p);
+}
+
+static bool is_flag_on(uint8_t p_flags, uint8_t flag) { return (p_flags & flag) == flag; }
+
+static void set_flag(uint8_t* p_flags, uint8_t flag, int val) {
+  if (!val) {
+    /* Clear flag. */
+    *p_flags = val & ~flag;
+  } else {
+    /* Turn flag on. */
+    *p_flags = val | flag;
+  }
+}
