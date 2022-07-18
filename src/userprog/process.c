@@ -8,7 +8,6 @@
 #include "userprog/gdt.h"
 #include "userprog/pagedir.h"
 #include "userprog/tss.h"
-#include "userprog/syscall.h"
 #include "filesys/directory.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
@@ -20,26 +19,10 @@
 #include "threads/synch.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
-#include "lib/kernel/hash.h"
-#include "lib/kernel/list.h"
 
-
-static void add_process(struct hash* map, pid_t pid, struct process* process);
-static void add_process_exit(struct hash* map, pid_t pid, int exit_val);
-
-struct process* get_process(struct hash* map, pid_t pid);
-static int get_process_exit(struct hash* map, pid_t pid);
-static void remove_process(struct hash* map, pid_t pid);
-static void free_process(struct process* process, int exit_val);
-static struct process* init_process(void);
-static bool is_flag_on(uint8_t p_flags, uint8_t flag);
-static void set_flag(uint8_t* p_flags, uint8_t flag, int val);
-static bool is_process_in(struct hash* map, pid_t pid);
-
-
+static struct semaphore temporary;
 static thread_func start_process NO_RETURN;
-static bool load(char* argv, void (**eip)(void), void** esp);
-static int count_words(char* argv);
+static bool load(const char* file_name, void (**eip)(void), void** esp);
 
 /* Initializes user programs in the system by ensuring the main
    thread has a minimal PCB so that it can execute and wait for
@@ -54,13 +37,8 @@ void userprog_init(void) {
      so that t->pcb->pagedir is guaranteed to be NULL (the kernel's
      page directory) when t->pcb is assigned, because a timer interrupt
      can come at any time and activate our pagedir */
-  init_process();
-  //t->pcb = calloc(sizeof(struct process), 1);
+  t->pcb = calloc(sizeof(struct process), 1);
   success = t->pcb != NULL;
-
-  //rw_lock_acquire(&pcb_index_lock, false);
-  //add_process(&pcb_index, t->tid, t->pcb);
-  //rw_lock_release(&pcb_index_lock, false);
 
   /* Kill the kernel if we did not succeed */
   ASSERT(success);
@@ -70,55 +48,48 @@ void userprog_init(void) {
    FILENAME.  The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
    process id, or TID_ERROR if the thread cannot be created. */
-pid_t process_execute(const char* argv) {
-#define MAX_FILE_NAME_LENGTH 32
-  char* argv_copy, *save_ptr, *file_name;
-  char file_name_buf[MAX_FILE_NAME_LENGTH]; 
+pid_t process_execute(const char* file_name) {
+  char* fn_copy;
   tid_t tid;
-  struct thread* t = thread_current();
 
+  sema_init(&temporary, 0);
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
-  argv_copy = palloc_get_page(0);
-  if (argv_copy == NULL)
+  fn_copy = palloc_get_page(0);
+  if (fn_copy == NULL)
     return TID_ERROR;
-  strlcpy(argv_copy, argv, PGSIZE);
-
-  /* Copy the name of file into file_name. */
-  strlcpy(file_name_buf, argv, MAX_FILE_NAME_LENGTH);
-  file_name = strtok_r(file_name_buf, " ", &save_ptr);
+  strlcpy(fn_copy, file_name, PGSIZE);
 
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create(file_name, PRI_DEFAULT, start_process, argv_copy);
-  if (tid == TID_ERROR) {
-    palloc_free_page(argv_copy);
-    return -1;
-  } else {
-    struct process* parent = t->pcb;
-    sema_down(&parent->blocked);
-    if(is_flag_on(parent->flags, CHILD_LOAD_SUCCESS)) {
-      add_process(&parent->children, tid, NULL); 
-    } else {
-      tid = -1;
-    }
-  }
-
-
+  tid = thread_create(file_name, PRI_DEFAULT, start_process, fn_copy);
+  if (tid == TID_ERROR)
+    palloc_free_page(fn_copy);
   return tid;
-#undef MAX_FILE_NAME_LENGTH
 }
 
 /* A thread function that loads a user process and starts it
    running. */
-static void start_process(void* argv_) {
-  char* argv = (char*)argv_;
-  struct intr_frame if_;
+static void start_process(void* file_name_) {
+  char* file_name = (char*)file_name_;
   struct thread* t = thread_current();
+  struct intr_frame if_;
   bool success, pcb_success;
 
   /* Allocate process control block */
-  struct process* new_pcb = init_process();
-  success = pcb_success = (new_pcb != NULL);
+  struct process* new_pcb = malloc(sizeof(struct process));
+  success = pcb_success = new_pcb != NULL;
+
+  /* Initialize process control block */
+  if (success) {
+    // Ensure that timer_interrupt() -> schedule() -> process_activate()
+    // does not try to activate our uninitialized pagedir
+    new_pcb->pagedir = NULL;
+    t->pcb = new_pcb;
+
+    // Continue initializing the PCB as normal
+    t->pcb->main_thread = t;
+    strlcpy(t->pcb->process_name, t->name, sizeof t->name);
+  }
 
   /* Initialize interrupt frame and load executable. */
   if (success) {
@@ -126,7 +97,7 @@ static void start_process(void* argv_) {
     if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
     if_.cs = SEL_UCSEG;
     if_.eflags = FLAG_IF | FLAG_MBS;
-    success = load(argv, &if_.eip, &if_.esp);
+    success = load(file_name, &if_.eip, &if_.esp);
   }
 
   /* Handle failure with succesful PCB malloc. Must free the PCB */
@@ -134,30 +105,17 @@ static void start_process(void* argv_) {
     // Avoid race where PCB is freed before t->pcb is set to NULL
     // If this happens, then an unfortuantely timed timer interrupt
     // can try to activate the pagedir, but it is now freed memory
-#define EXIT_FAILED_LOAD -2
-    free_process(new_pcb, EXIT_FAILED_LOAD);
-#undef EXIT_FAILED_LOAD
+    struct process* pcb_to_free = t->pcb;
+    t->pcb = NULL;
+    free(pcb_to_free);
   }
 
   /* Clean up. Exit on failure or jump to userspace */
-  palloc_free_page(argv);
-  rw_lock_acquire(&pcb_index_lock, true);
-  struct process* parent = get_process(&pcb_index, t->parent_tid);
+  palloc_free_page(file_name);
   if (!success) {
-    if(parent) {
-      set_flag(&parent->flags, CHILD_LOAD_SUCCESS, 0);
-      sema_up(&parent->blocked);
-    }
-
-    rw_lock_release(&pcb_index_lock, true);
+    sema_up(&temporary);
     thread_exit();
   }
-
-  if(parent) {
-    set_flag(&parent->flags, CHILD_LOAD_SUCCESS, 1);
-    sema_up(&parent->blocked);
-  }
-  rw_lock_release(&pcb_index_lock, true);
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -165,10 +123,6 @@ static void start_process(void* argv_) {
      arguments on the stack in the form of a `struct intr_frame',
      we just point the stack pointer (%esp) to our stack frame
      and jump to it. */
-
-  char fpu[108];
-  asm volatile("fsave (%0); fninit; fsave (%1); frstor (%0)" : : "g"(&fpu), "g"(&if_.fpu) : "memory");
-  
   asm volatile("movl %0, %%esp; jmp intr_exit" : : "g"(&if_) : "memory");
   NOT_REACHED();
 }
@@ -182,44 +136,47 @@ static void start_process(void* argv_) {
 
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
-int process_wait(pid_t child_pid) {
-  /* First, find the child process to wait on. */
-  struct process* parent = thread_current()->pcb;
-
-  /* No need to lock, only parent adds to its list. */
-  if(is_process_in(&parent->children, child_pid)) {
-    parent->awaiting_id = child_pid;
-    set_flag(&parent->flags, PROCESS_WAITING, 1);
-    rw_lock_acquire(&pcb_index_lock, true);
-    bool child_alive = is_process_in(&pcb_index, child_pid);
-    rw_lock_release(&pcb_index_lock, true);
-
-    if(child_alive) {
-      sema_down(&parent->blocked);
-    }
-
-    remove_process(&parent->children, child_pid);
-    lock_acquire(&parent->exit_codes_lock);
-    int exit_val = get_process_exit(&parent->exit_codes, child_pid);
-    remove_process(&parent->exit_codes, child_pid);
-    lock_release(&parent->exit_codes_lock);
-    set_flag(&parent->flags, PROCESS_WAITING, 0);
-    return exit_val;
-  }
-  return -1;
+int process_wait(pid_t child_pid UNUSED) {
+  sema_down(&temporary);
+  return 0;
 }
 
 /* Free the current process's resources. */
-void process_exit(int code) {
+void process_exit(void) {
   struct thread* cur = thread_current();
+  uint32_t* pd;
+
   /* If this thread does not have a PCB, don't worry */
   if (cur->pcb == NULL) {
     thread_exit();
     NOT_REACHED();
   }
 
-  free_process(cur->pcb, code);
+  /* Destroy the current process's page directory and switch back
+     to the kernel-only page directory. */
+  pd = cur->pcb->pagedir;
+  if (pd != NULL) {
+    /* Correct ordering here is crucial.  We must set
+         cur->pcb->pagedir to NULL before switching page directories,
+         so that a timer interrupt can't switch back to the
+         process page directory.  We must activate the base page
+         directory before destroying the process's page
+         directory, or our active page directory will be one
+         that's been freed (and cleared). */
+    cur->pcb->pagedir = NULL;
+    pagedir_activate(NULL);
+    pagedir_destroy(pd);
+  }
 
+  /* Free the PCB of this process and kill this thread
+     Avoid race where PCB is freed before t->pcb is set to NULL
+     If this happens, then an unfortuantely timed timer interrupt
+     can try to activate the pagedir, but it is now freed memory */
+  struct process* pcb_to_free = cur->pcb;
+  cur->pcb = NULL;
+  free(pcb_to_free);
+
+  sema_up(&temporary);
   thread_exit();
 }
 
@@ -239,7 +196,68 @@ void process_activate(void) {
   tss_update();
 }
 
-static bool setup_stack(void** esp, char* argv);
+/* We load ELF binaries.  The following definitions are taken
+   from the ELF specification, [ELF1], more-or-less verbatim.  */
+
+/* ELF types.  See [ELF1] 1-2. */
+typedef uint32_t Elf32_Word, Elf32_Addr, Elf32_Off;
+typedef uint16_t Elf32_Half;
+
+/* For use with ELF types in printf(). */
+#define PE32Wx PRIx32 /* Print Elf32_Word in hexadecimal. */
+#define PE32Ax PRIx32 /* Print Elf32_Addr in hexadecimal. */
+#define PE32Ox PRIx32 /* Print Elf32_Off in hexadecimal. */
+#define PE32Hx PRIx16 /* Print Elf32_Half in hexadecimal. */
+
+/* Executable header.  See [ELF1] 1-4 to 1-8.
+   This appears at the very beginning of an ELF binary. */
+struct Elf32_Ehdr {
+  unsigned char e_ident[16];
+  Elf32_Half e_type;
+  Elf32_Half e_machine;
+  Elf32_Word e_version;
+  Elf32_Addr e_entry;
+  Elf32_Off e_phoff;
+  Elf32_Off e_shoff;
+  Elf32_Word e_flags;
+  Elf32_Half e_ehsize;
+  Elf32_Half e_phentsize;
+  Elf32_Half e_phnum;
+  Elf32_Half e_shentsize;
+  Elf32_Half e_shnum;
+  Elf32_Half e_shstrndx;
+};
+
+/* Program header.  See [ELF1] 2-2 to 2-4.
+   There are e_phnum of these, starting at file offset e_phoff
+   (see [ELF1] 1-6). */
+struct Elf32_Phdr {
+  Elf32_Word p_type;
+  Elf32_Off p_offset;
+  Elf32_Addr p_vaddr;
+  Elf32_Addr p_paddr;
+  Elf32_Word p_filesz;
+  Elf32_Word p_memsz;
+  Elf32_Word p_flags;
+  Elf32_Word p_align;
+};
+
+/* Values for p_type.  See [ELF1] 2-3. */
+#define PT_NULL 0           /* Ignore. */
+#define PT_LOAD 1           /* Loadable segment. */
+#define PT_DYNAMIC 2        /* Dynamic linking info. */
+#define PT_INTERP 3         /* Name of dynamic loader. */
+#define PT_NOTE 4           /* Auxiliary info. */
+#define PT_SHLIB 5          /* Reserved. */
+#define PT_PHDR 6           /* Program header table. */
+#define PT_STACK 0x6474e551 /* Stack segment. */
+
+/* Flags for p_flags.  See [ELF3] 2-3 and 2-4. */
+#define PF_X 1 /* Executable. */
+#define PF_W 2 /* Writable. */
+#define PF_R 4 /* Readable. */
+
+static bool setup_stack(void** esp);
 static bool validate_segment(const struct Elf32_Phdr*, struct file*);
 static bool load_segment(struct file* file, off_t ofs, uint8_t* upage, uint32_t read_bytes,
                          uint32_t zero_bytes, bool writable);
@@ -248,20 +266,13 @@ static bool load_segment(struct file* file, off_t ofs, uint8_t* upage, uint32_t 
    Stores the executable's entry point into *EIP
    and its initial stack pointer into *ESP.
    Returns true if successful, false otherwise. */
-bool load(char* argv, void (**eip)(void), void** esp) {
+bool load(const char* file_name, void (**eip)(void), void** esp) {
   struct thread* t = thread_current();
   struct Elf32_Ehdr ehdr;
   struct file* file = NULL;
   off_t file_ofs;
   bool success = false;
   int i;
-
-  /* We create copy for setup_stack. strtok_r modifies string. */
-  char argv_copy[strlen(argv) + 1];
-  memcpy(argv_copy, argv, strlen(argv) + 1);
-
-  char* file_name, *dummy_p;
-  file_name = strtok_r(argv, " ", &dummy_p);
 
   /* Allocate and activate page directory. */
   t->pcb->pagedir = pagedir_create();
@@ -270,17 +281,11 @@ bool load(char* argv, void (**eip)(void), void** esp) {
   process_activate();
 
   /* Open executable file. */
-  int fd = get_next_fd();
-  struct process* p = t->pcb;
   file = filesys_open(file_name);
-  
   if (file == NULL) {
     printf("load: %s: open failed\n", file_name);
     goto done;
   }
-  file_deny_write(file);
-  p->fd_table[fd] = file;
-
 
   /* Read and verify executable header. */
   if (file_read(file, &ehdr, sizeof ehdr) != sizeof ehdr ||
@@ -316,7 +321,7 @@ bool load(char* argv, void (**eip)(void), void** esp) {
         goto done;
       case PT_LOAD:
         if (validate_segment(&phdr, file)) {
-          bool writable = (phdr.p_flags & PFLAG_W) != 0;
+          bool writable = (phdr.p_flags & PF_W) != 0;
           uint32_t file_page = phdr.p_offset & ~PGMASK;
           uint32_t mem_page = phdr.p_vaddr & ~PGMASK;
           uint32_t page_offset = phdr.p_vaddr & PGMASK;
@@ -341,7 +346,7 @@ bool load(char* argv, void (**eip)(void), void** esp) {
   }
 
   /* Set up stack. */
-  if (!setup_stack(esp, argv_copy))
+  if (!setup_stack(esp))
     goto done;
 
   /* Start address. */
@@ -351,6 +356,7 @@ bool load(char* argv, void (**eip)(void), void** esp) {
 
 done:
   /* We arrive here whether the load is successful or not. */
+  file_close(file);
   return success;
 }
 
@@ -457,79 +463,17 @@ static bool load_segment(struct file* file, off_t ofs, uint8_t* upage, uint32_t 
 
 /* Create a minimal stack by mapping a zeroed page at the top of
    user virtual memory. */
-static bool setup_stack(void** esp, char* argv) {
+static bool setup_stack(void** esp) {
   uint8_t* kpage;
   bool success = false;
 
   kpage = palloc_get_page(PAL_USER | PAL_ZERO);
   if (kpage != NULL) {
     success = install_page(((uint8_t*)PHYS_BASE) - PGSIZE, kpage, true);
-    if (success) {
+    if (success)
       *esp = PHYS_BASE;
-      uint8_t* sp = *esp; /* Handy alias for *esp. */
-
-      /* Allocate room for the addresses we will be storing. */
-      int argc = count_words(argv);
-      uint32_t addresses[argc + 1];
-      int addr_i = 0;
-
-      /* Get token. */
-      char* token, *save_ptr;
-      for(token = strtok_r(argv, " ", &save_ptr); token != NULL;
-          token = strtok_r(NULL, " ", &save_ptr)) {
-
-        /* Get length of token. */
-        int token_len = strlen(token) + 1;
-        
-        /* Move stack back TOKEN_LEN bytes. */
-        sp -= token_len;
-
-        /* Copy token to stack. */
-        memcpy(sp, token, token_len);
-
-        /* Copy address of token beginning. */
-        addresses[addr_i++] = (uint32_t)sp;
-      }
-
-      addresses[argc] = 0x0;
-      sp -= 1;
-
-      /* Allign sp on 16-byte boundary. */
-      while(((uint32_t)sp - (sizeof(uint32_t*) * (argc + 3))) % 0x10 != 0) {
-        memset(sp, 0x0, sizeof(char));
-        sp -= 1;
-      }
-
-      /* We add num. of argc + 1 + &argv + argc
-       *    ie. argc + 3 */
-
-      //int align_count = argc + 4;
-      //if(*((uint32_t*)(&sp)) - align_count % 0x10 != 0
-
-      /* Copy addresses of passed in arguments to stack. */
-      for(int i = argc; i >= 0; i--) {
-        sp -= sizeof(uint32_t);
-        memcpy(sp, &addresses[i], sizeof(uint32_t));
-      }
-
-      /* Copy address of the beginning of argv. */
-      memcpy(sp - sizeof(uint32_t), &sp, sizeof(uint32_t));
-      sp -= sizeof(uint32_t);
-
-      /* Push argc to stack. */
-      sp -= sizeof(int);
-      memcpy(sp, &argc, sizeof(int));
-
-      /* Push dummy return address to stack. */
-      sp -= sizeof(void*);
-      memset(sp, 0x0, sizeof(void*));
-
-      /* Re-assign the actual stack pointer. */
-      *esp = (void*)sp;
-
-    } else {
+    else
       palloc_free_page(kpage);
-    }
   }
   return success;
 }
@@ -557,197 +501,3 @@ bool is_main_thread(struct thread* t, struct process* p) { return p->main_thread
 
 /* Gets the PID of a process */
 pid_t get_pid(struct process* p) { return (pid_t)p->main_thread->tid; }
-
-/* Counts words in a single string. */
-static int count_words(char* source) {
-  int count = 0;
-  char* start = source;
-  char* curr = source;
-
-  while(true) {
-    while(*start != '\0' && *start == ' ') start++;
-    curr = start;
-    while(*curr != '\0' && *curr != ' ') curr++;
-    int len = curr - start;
-    if(len == 0) break;
-    count++;
-    start = curr;
-  }
-  return count;
-}
-
-/* Functions for for adding/removing/getting from a pcb HASH. */
-
-static bool pcb_less(const struct hash_elem* a, const struct hash_elem* b, void* aux);
-static unsigned pcb_hash(const struct hash_elem* e, void* aux);
-static void pcb_destructor(struct hash_elem* e, void* aux);
-
-
-bool init_pcb_index(void) {
-  rw_lock_init(&pcb_index_lock);
-  return hash_init(&pcb_index, pcb_hash, pcb_less, NULL);
-}
-
-
-static bool pcb_less(const struct hash_elem* a, const struct hash_elem* b, UNUSED void* aux) {
-  struct process_h* pa = hash_entry(a, struct process_h, hash_elem);
-  struct process_h* pb = hash_entry(b, struct process_h, hash_elem);
-  return pa->pid - pb->pid;
-}
-
-
-static unsigned pcb_hash(const struct hash_elem* e, UNUSED void* aux) {
-  struct process_h* p = hash_entry(e, struct process_h, hash_elem);
-  return p->pid;
-}
-
-
-struct process* get_process(struct hash* map, pid_t pid) {
-  struct process_h temp;
-  temp.pid = pid;
-  struct hash_elem* e = hash_find(map, &temp.hash_elem);
-  if(!e) {
-    return NULL;
-  }
-  struct process_h* found = hash_entry(e, struct process_h, hash_elem);
-  return found->process;
-}
-
-static int get_process_exit(struct hash* map, pid_t pid) {
-  struct process_h temp;
-  temp.pid = pid;
-  struct hash_elem* e = hash_find(map, &temp.hash_elem);
-  if(!e) {
-#define EXIT_CODE_NOT_FOUND -3
-    return EXIT_CODE_NOT_FOUND;
-#undef EXIT_CODE_NOT_FOUND
-  }
-  struct process_h* found = hash_entry(e, struct process_h, hash_elem);
-  return found->exit_val;
-}
-
-
-
-
-static void add_process(struct hash* map, pid_t pid, struct process* process) {
-  struct process_h* temp = malloc(sizeof(struct process_h));
-  temp->pid = pid;
-  temp->process = process;
-  hash_insert(map, &temp->hash_elem);
-}
-
-static void add_process_exit(struct hash* map, pid_t pid, int exit_val) {
-  struct process_h* temp = malloc(sizeof(struct process_h));
-  temp->pid = pid;
-  temp->exit_val = exit_val;
-  hash_insert(map, &temp->hash_elem);
-}
-
-
-static bool is_process_in(struct hash* map, pid_t pid) {
-  struct process_h temp;
-  temp.pid = pid;
-  struct hash_elem* e = hash_find(map, &temp.hash_elem);
-  if(e) return true;
-  return false;
-}
-
-static void remove_process(struct hash* map, pid_t pid) {
-  struct process_h temp;
-  temp.pid = pid;
-  struct hash_elem* e = hash_delete(map, &temp.hash_elem);
-  struct process_h* p = hash_entry(e, struct process_h, hash_elem);
-  free(p);
-}
-
-/* Functions for initializing and freeing a process. */
-
-static struct process* init_process(void) {
-  struct thread* thread = thread_current();
-  struct process* new_process = NULL;
-
-  /* Always use calloc to insure pcb->pagedir is NULL! */
-  new_process = calloc(sizeof(struct process), 1);
-  if(!new_process) return NULL;
-
-  new_process->pagedir = NULL;
-  thread->pcb = new_process;
-  new_process->main_thread = thread;
-  strlcpy(new_process->process_name, thread->name, sizeof thread->name);
-  new_process->flags = NO_FLAGS;
-  lock_init(&new_process->exit_codes_lock);
-  sema_init(&new_process->blocked, 0);
-  hash_init(&new_process->children, pcb_hash, pcb_less, NULL);
-  hash_init(&new_process->exit_codes, pcb_hash, pcb_less, NULL);
-#define MAX_OPEN 64
-  new_process->fd_table = calloc(MAX_OPEN, sizeof(struct file*));
-#undef MAX_OPEN
-  new_process->fd_count = 3;
-
-  rw_lock_acquire(&pcb_index_lock, false);
-  add_process(&pcb_index, thread->tid, new_process);
-  rw_lock_release(&pcb_index_lock, false);
-
-  return new_process;
-}
-
-static void free_process(struct process* process, int exit_val) {
-  struct thread* thread = thread_current();
-
-  rw_lock_acquire(&pcb_index_lock, false);
-
-  /* Get parent. */
-  pid_t parent_pid = thread->parent_tid;
-  struct process* parent = get_process(&pcb_index, parent_pid);
-  if(parent) {
-    /* Not necessary due to pcb_index_lock. But for good measure. */
-    lock_acquire(&parent->exit_codes_lock);
-    add_process_exit(&parent->exit_codes, thread->tid, exit_val);
-    lock_release(&parent->exit_codes_lock);
-
-    if(is_flag_on(parent->flags, PROCESS_WAITING) && parent->awaiting_id == thread->tid) {
-      sema_up(&parent->blocked);
-    } 
-  }
-
-  remove_process(&pcb_index, thread->tid);
-  rw_lock_release(&pcb_index_lock, false);
-
-  uint32_t* pd = process->pagedir;
-  if(pd != NULL) {
-    process->pagedir = NULL;
-    pagedir_activate(NULL);
-    pagedir_destroy(pd);
-  }
-
-  /* Lock not necessary because removed from PCB_INDEX. */
-  hash_destroy(&process->children, pcb_destructor);
-  hash_destroy(&process->exit_codes, pcb_destructor);
-  struct file* exe_file = process->fd_table[3]; // Always the running executable.
-  file_close(exe_file);
-  free(process->fd_table);
-
-  thread->pcb = NULL;
-  free(process);
-}
-
-static void pcb_destructor(struct hash_elem* e, UNUSED void* aux) {
-  struct process_h* p = hash_entry(e, struct process_h, hash_elem);
-  free(p);
-}
-
-
-static bool is_flag_on(uint8_t p_flags, uint8_t flag) {
-  return (p_flags & flag) == flag;
-}
-
-
-static void set_flag(uint8_t* p_flags, uint8_t flag, int val) {
-  if(!val) {
-    /* Clear flag. */
-    *p_flags = val & ~flag;
-  } else {
-    /* Turn flag on. */
-    *p_flags = val | flag;
-  }
-}

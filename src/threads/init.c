@@ -119,7 +119,6 @@ int main(void) {
   timer_calibrate();
 
 #ifdef USERPROG
-  init_pcb_index();
   /* Give main thread a minimal PCB so it can launch the first process */
   userprog_init();
 #endif
