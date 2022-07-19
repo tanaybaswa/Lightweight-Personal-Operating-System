@@ -93,6 +93,10 @@ struct thread {
   /* Shared between thread.c and synch.c. */
   struct list_elem elem; /* List element. */
 
+  struct list_elem sleep_elem;  /* for sleep_thread_list */
+  int64_t sleep_start; //the original time they went to sleep
+  int64_t sleep_duration; //how long they need to sleep
+
 #ifdef USERPROG
   /* Owned by process.c. */
   struct process* pcb; /* Process control block if this thread is a userprog */
@@ -102,13 +106,13 @@ struct thread {
   unsigned magic; /* Detects stack overflow. */
 };
 
-/* Types of scheduler that the user can request the kernel
- * use to schedule threads at runtime. */
+/* Types of r that the user can request the kernel
+ * use to  threads at runtime. */
 enum sched_policy {
-  SCHED_FIFO,  // First-in, first-out scheduler
-  SCHED_PRIO,  // Strict-priority scheduler with round-robin tiebreaking
-  SCHED_FAIR,  // Implementation-defined fair scheduler
-  SCHED_MLFQS, // Multi-level Feedback Queue Scheduler
+  SCHED_FIFO,  // First-in, first-out r
+  SCHED_PRIO,  // Strict-priority r with round-robin tiebreaking
+  SCHED_FAIR,  // Implementation-defined fair r
+  SCHED_MLFQS, // Multi-level Feedback Queue r
 };
 #define SCHED_DEFAULT SCHED_FIFO
 

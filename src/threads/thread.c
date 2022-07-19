@@ -11,6 +11,10 @@
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
+#include <stdlib.h>
+#include "devices/timer.h"
+#include "threads/malloc.h"
+
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
@@ -43,6 +47,8 @@ struct kernel_thread_frame {
   thread_func* function; /* Function to call. */
   void* aux;             /* Auxiliary data for function. */
 };
+
+struct list sleep_thread_list; // keep track of sleeping threads
 
 /* Statistics. */
 static long long idle_ticks;   /* # of timer ticks spent idle. */
@@ -109,6 +115,7 @@ void thread_init(void) {
   lock_init(&tid_lock);
   list_init(&fifo_ready_list);
   list_init(&all_list);
+  list_init(&sleep_thread_list);
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread();
@@ -146,6 +153,18 @@ void thread_tick(void) {
 #endif
   else
     kernel_ticks++;
+
+  struct list_elem* e;
+  for (e = list_begin(&sleep_thread_list); e != list_end(&sleep_thread_list); e = list_next(e)) {
+    struct thread* sleep_thread = list_entry(e, struct thread, sleep_elem);
+    int64_t elapsed = timer_elapsed(sleep_thread->sleep_start);
+    if (elapsed >= sleep_thread->sleep_duration) {
+      // remove e from sleep_thread_list
+      thread_unblock(sleep_thread);
+      list_remove(e);
+    }
+  }
+
 
   /* Enforce preemption. */
   if (++thread_ticks >= TIME_SLICE)
@@ -540,7 +559,7 @@ static void schedule(void) {
   struct thread* next = next_thread_to_run();
   struct thread* prev = NULL;
 
-  ASSERT(intr_get_level() == INTR_OFF);
+  ASSERT(intr_get_level() == INTR_OFF);  
   ASSERT(cur->status != THREAD_RUNNING);
   ASSERT(is_thread(next));
 
