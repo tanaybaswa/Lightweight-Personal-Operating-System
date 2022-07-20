@@ -87,12 +87,14 @@ struct thread {
   enum thread_status status; /* Thread state. */
   char name[16];             /* Name (for debugging purposes). */
   uint8_t* stack;            /* Saved stack pointer. */
-  int priority;              /* Priority. */
+  int priority;              /* (Base) Priority. */
+  int effective_priority;    /* Effective priority of thread. */
   struct list_elem allelem;  /* List element for all threads list. */
+  struct list locks; /* List of all locks held by thread. */
+  struct lock* waiting; /* Lock that a thread is waiting on. */
 
   /* Shared between thread.c and synch.c. */
   struct list_elem elem; /* List element. */
-
   struct list_elem sleep_elem;  /* for sleep_thread_list */
   int64_t sleep_start; //the original time they went to sleep
   int64_t sleep_duration; //how long they need to sleep
