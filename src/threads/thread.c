@@ -261,12 +261,22 @@ static void thread_enqueue(struct thread* t) {
   ASSERT(intr_get_level() == INTR_OFF);
   ASSERT(is_thread(t));
 
-  if (active_sched_policy == SCHED_FIFO)
+  if (active_sched_policy == SCHED_FIFO) {
     list_push_back(&fifo_ready_list, &t->elem);
-  else if(active_sched_policy == SCHED_PRIO)
+  } else if(active_sched_policy == SCHED_PRIO) {
     list_insert_ordered(&prio_ready_list, &t->elem, prio_less, NULL);
-  else
+    /* Need to pre-empt the list.
+     *
+    struct list_elem* front = list_front(&prio_ready_list);
+    struct thread* front_t = list_entry(front, struct thread, elem);
+    if(front_t->effective_priority > thread_current()->effective_priority) {
+      thread_yield();
+    }
+    */
+
+  } else {
     PANIC("Unimplemented scheduling policy value: %d", active_sched_policy);
+  }
 }
 
 /* Sorting function used to sort threads by EFFECTIVE_PRIORITY. */
@@ -419,6 +429,9 @@ void thread_set_eff_priority(struct thread* t, int new_priority) {
  * within the ready queue. */
 static bool sort_needed(struct thread* t) {
   struct thread* curr_thread = t;
+
+  if(list_empty(&prio_ready_list)) return false;
+  ASSERT(!list_empty(&prio_ready_list));
   struct list_elem* curr_thread_elem = &curr_thread->elem;
   struct list_elem* next_thread_elem = list_next(curr_thread_elem);
   struct list_elem* prev_thread_elem = list_prev(curr_thread_elem);
@@ -478,6 +491,7 @@ static void idle(void* idle_started_ UNUSED) {
 
   for (;;) {
     /* Let someone else run. */
+    //sema_up(idle_started);
     intr_disable();
     thread_block();
 
