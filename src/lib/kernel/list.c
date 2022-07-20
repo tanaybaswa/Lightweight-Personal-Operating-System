@@ -35,7 +35,7 @@ static bool is_sorted(struct list_elem* a, struct list_elem* b, list_less_func* 
                       void* aux) UNUSED;
 
 /* Returns true if ELEM is a head, false otherwise. */
-static inline bool is_head(struct list_elem* elem) {
+bool is_head(struct list_elem* elem) {
   return elem != NULL && elem->prev == NULL && elem->next != NULL;
 }
 
@@ -46,7 +46,7 @@ static inline bool is_interior(struct list_elem* elem) {
 }
 
 /* Returns true if ELEM is a tail, false otherwise. */
-static inline bool is_tail(struct list_elem* elem) {
+bool is_tail(struct list_elem* elem) {
   return elem != NULL && elem->prev != NULL && elem->next == NULL;
 }
 
@@ -438,4 +438,15 @@ struct list_elem* list_min(struct list* list, list_less_func* less, void* aux) {
         min = e;
   }
   return min;
+}
+
+/* See header file for reason why these fellas here. */
+int max(int a, int b) {
+  if(a >= b) return a;
+  return b;
+}
+
+int min(int a, int b) {
+  if(a <= b) return a;
+  return b;
 }

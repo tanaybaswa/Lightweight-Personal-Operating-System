@@ -158,8 +158,8 @@ void lock_init(struct lock* lock) {
   ASSERT(lock != NULL);
 
   lock->holder = NULL;
-  lock->max_priority = PRI_MIN;
-  lock->tid_max_priority = -1;
+  lock->priority = PRI_MIN;
+  lock->tid_priority = -1;
   sema_init(&lock->semaphore, 1);
 }
 
@@ -176,7 +176,21 @@ void lock_acquire(struct lock* lock) {
   ASSERT(!intr_context());
   ASSERT(!lock_held_by_current_thread(lock));
 
-  sema_down(&lock->semaphore);
+
+
+  enum intr_level old_level;
+  old_level = intr_disable();
+  while(lock->semaphore.value == 0) {
+    list_push_back(&lock->semaphore.waiters, &thread_current()->elem);
+    thread_block();
+  }
+
+  (lock->semaphore.value)--;
+  intr_set_level(old_level);
+
+
+
+
   lock->holder = thread_current();
 }
 
@@ -218,6 +232,19 @@ bool lock_held_by_current_thread(const struct lock* lock) {
   ASSERT(lock != NULL);
 
   return lock->holder == thread_current();
+}
+
+/* Sets a lock's max. priority. MUST be called with interrupts
+ * dissabled. */
+void lock_set_priority(struct lock* lock, tid_t tid, int new_priority) {
+  /* Check if new_priority is less than lock max. */
+  if(new_priority > lock->priority) {
+    lock->tid_priority = tid;
+    lock->priority = new_priority;
+    
+    /* Must update holder of lock. */
+    thread_set_eff_priority(lock->holder, new_priority);
+  }
 }
 
 /* Initializes a readers-writers lock */
