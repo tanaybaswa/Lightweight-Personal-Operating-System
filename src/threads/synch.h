@@ -4,6 +4,8 @@
 #include <list.h>
 #include <stdbool.h>
 
+typedef int tid_t;
+
 /* A counting semaphore. */
 struct semaphore {
   unsigned value;      /* Current value. */
@@ -20,6 +22,9 @@ void sema_self_test(void);
 struct lock {
   struct thread* holder;      /* Thread holding lock (for debugging). */
   struct semaphore semaphore; /* Binary semaphore controlling access. */
+  struct list_elem elem; /* For thread that holds lock to use. */
+  int max_priority; /* Max. priority amongst waiters of lock. */
+  tid_t tid_max_priority; /* tid of thread waiting on lock with max. prio. */
 };
 
 void lock_init(struct lock*);

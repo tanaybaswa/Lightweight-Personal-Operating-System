@@ -11,6 +11,10 @@
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
+#include <stdlib.h>
+#include "devices/timer.h"
+#include "threads/malloc.h"
+
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
@@ -23,6 +27,7 @@
 /* List of processes in THREAD_READY state, that is, processes
    that are ready to run but not actually running. */
 static struct list fifo_ready_list;
+static struct list prio_ready_list;
 
 /* List of all processes.  Processes are added to this list
    when they are first scheduled and removed when they exit. */
@@ -43,6 +48,8 @@ struct kernel_thread_frame {
   thread_func* function; /* Function to call. */
   void* aux;             /* Auxiliary data for function. */
 };
+
+struct list sleep_thread_list; // keep track of sleeping threads
 
 /* Statistics. */
 static long long idle_ticks;   /* # of timer ticks spent idle. */
@@ -68,6 +75,7 @@ static struct thread* running_thread(void);
 static struct thread* next_thread_to_run(void);
 static struct thread* thread_schedule_fifo(void);
 static struct thread* thread_schedule_prio(void);
+static bool prio_less(struct list_elem*, struct list_elem*, void*);
 static struct thread* thread_schedule_fair(void);
 static struct thread* thread_schedule_mlfqs(void);
 static struct thread* thread_schedule_reserved(void);
@@ -108,7 +116,9 @@ void thread_init(void) {
 
   lock_init(&tid_lock);
   list_init(&fifo_ready_list);
+  list_init(&prio_ready_list);
   list_init(&all_list);
+  list_init(&sleep_thread_list);
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread();
@@ -146,6 +156,18 @@ void thread_tick(void) {
 #endif
   else
     kernel_ticks++;
+
+  struct list_elem* e;
+  for (e = list_begin(&sleep_thread_list); e != list_end(&sleep_thread_list); e = list_next(e)) {
+    struct thread* sleep_thread = list_entry(e, struct thread, sleep_elem);
+    int64_t elapsed = timer_elapsed(sleep_thread->sleep_start);
+    if (elapsed >= sleep_thread->sleep_duration) {
+      // remove e from sleep_thread_list
+      thread_unblock(sleep_thread);
+      list_remove(e);
+    }
+  }
+
 
   /* Enforce preemption. */
   if (++thread_ticks >= TIME_SLICE)
@@ -226,6 +248,7 @@ void thread_block(void) {
   schedule();
 }
 
+
 /* Places a thread on the ready structure appropriate for the
    current active scheduling policy.
    
@@ -236,9 +259,19 @@ static void thread_enqueue(struct thread* t) {
 
   if (active_sched_policy == SCHED_FIFO)
     list_push_back(&fifo_ready_list, &t->elem);
+  else if(active_sched_policy == SCHED_PRIO)
+    list_insert_ordered(&prio_ready_list, &t->elem, prio_less, NULL);
   else
     PANIC("Unimplemented scheduling policy value: %d", active_sched_policy);
 }
+
+/* Sorting function used to sort threads by EFFECTIVE_PRIORITY. */
+static bool prio_less(struct list_elem* a, struct list_elem* b, void* aux) {
+  struct thread* ta = list_entry(a, struct thread, elem);
+  struct thread* tb = list_entry(b, struct thread, elem);
+  return ta->effective_priority < tb->effective_priority;
+}
+
 
 /* Transitions a blocked thread T to the ready-to-run state.
    This is an error if T is not blocked.  (Use thread_yield() to
@@ -427,7 +460,9 @@ static void init_thread(struct thread* t, const char* name, int priority) {
   t->status = THREAD_BLOCKED;
   strlcpy(t->name, name, sizeof t->name);
   t->stack = (uint8_t*)t + PGSIZE;
-  t->priority = priority;
+  t->effective_priority = t->priority = priority;
+  list_init(&t->locks);
+  t->waiting = NULL;
   t->pcb = NULL;
   t->magic = THREAD_MAGIC;
 
@@ -457,7 +492,10 @@ static struct thread* thread_schedule_fifo(void) {
 
 /* Strict priority scheduler */
 static struct thread* thread_schedule_prio(void) {
-  PANIC("Unimplemented scheduler policy: \"-sched=prio\"");
+  if(!list_empty(&prio_ready_list))
+    return list_entry(list_pop_front(&prio_ready_list), struct thread, elem);
+  else
+    return idle_thread;
 }
 
 /* Fair priority scheduler */
@@ -540,7 +578,7 @@ static void schedule(void) {
   struct thread* next = next_thread_to_run();
   struct thread* prev = NULL;
 
-  ASSERT(intr_get_level() == INTR_OFF);
+  ASSERT(intr_get_level() == INTR_OFF);  
   ASSERT(cur->status != THREAD_RUNNING);
   ASSERT(is_thread(next));
 

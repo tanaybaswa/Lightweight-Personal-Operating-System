@@ -158,6 +158,8 @@ void lock_init(struct lock* lock) {
   ASSERT(lock != NULL);
 
   lock->holder = NULL;
+  lock->max_priority = PRI_MIN;
+  lock->tid_max_priority = -1;
   sema_init(&lock->semaphore, 1);
 }
 
