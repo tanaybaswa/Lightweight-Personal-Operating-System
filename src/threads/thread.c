@@ -409,6 +409,12 @@ void thread_set_priority(int new_priority) {
   if(new_priority > t->effective_priority) {
     thread_set_eff_priority(t, new_priority);
   }
+
+  if(list_empty(&t->locks)) {
+    t->effective_priority = new_priority;
+    thread_set_eff_priority(t, new_priority);
+  }
+
   intr_set_level(old_level);
   thread_preempt();
 }
