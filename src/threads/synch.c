@@ -109,7 +109,8 @@ void sema_up(struct semaphore* sema) {
   ASSERT(sema != NULL);
 
   old_level = intr_disable();
-  if (!list_empty(&sema->waiters))
+  bool empty = list_empty(&sema->waiters);
+  if (!empty)
     thread_unblock(list_entry(list_pop_front(&sema->waiters), struct thread, elem));
   sema->value++;
   intr_set_level(old_level);
@@ -223,6 +224,30 @@ static void lock_collect(struct lock* lock, struct thread* t) {
 static void lock_lose(struct lock* lock) {
   lock->holder = NULL;
   list_remove(&lock->elem);
+
+  /* In case the current thread acquired more locks using a donation
+   * from this lock, we must iterate through all the thread's locks
+   * and inform them of the priority change (ie make them search again). */
+  struct thread* curr_t = thread_current();
+  struct list* locks = &curr_t->locks;
+
+  /* Reset the current thread's priority. This creates a redundancy later on
+   * in thread_set_eff_priority but it is needed here. */
+  //cur->effective_priority = cur->priority;
+
+  struct list_elem* e;
+  for(e = list_begin(locks); e != list_end(locks); e = list_next(e)) {
+    struct lock* lock = list_entry(e, struct lock, elem);
+
+    /* Lock was getting its max value from the current locks donation. */
+    if(lock->tid_priority == curr_t->tid) {
+      /* Since the current thread holds the lock and lock_find_max only
+       * searches its waiters for the new max value, this will be OK. */
+      lock_find_max(lock);
+    }
+
+  }
+
 }
 
 /* Tries to acquires LOCK and returns true if successful or false
@@ -272,7 +297,8 @@ void lock_release(struct lock* lock) {
   }
   (lock->semaphore.value)++;
   intr_set_level(old_level);
-  // thread_yield();
+
+  thread_preempt();
 
 }
 

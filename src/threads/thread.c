@@ -83,6 +83,7 @@ static struct thread* thread_schedule_mlfqs(void);
 static struct thread* thread_schedule_reserved(void);
 
 static bool sort_needed(struct thread*);
+void thread_preempt(void);
 
 /* Determines which scheduler the kernel should use.
    Controlled by the kernel command-line options
@@ -235,6 +236,9 @@ tid_t thread_create(const char* name, int priority, thread_func* function, void*
   /* Add to run queue. */
   thread_unblock(t);
 
+  /* Preempt any old threads. */
+  thread_preempt();
+
   return tid;
 }
 
@@ -265,18 +269,35 @@ static void thread_enqueue(struct thread* t) {
     list_push_back(&fifo_ready_list, &t->elem);
   } else if(active_sched_policy == SCHED_PRIO) {
     list_insert_ordered(&prio_ready_list, &t->elem, prio_less, NULL);
-    /* Need to pre-empt the list.
-     *
-    struct list_elem* front = list_front(&prio_ready_list);
-    struct thread* front_t = list_entry(front, struct thread, elem);
-    if(front_t->effective_priority > thread_current()->effective_priority) {
-      thread_yield();
-    }
-    */
-
   } else {
     PANIC("Unimplemented scheduling policy value: %d", active_sched_policy);
   }
+}
+
+/* Preempts the running thread if it is no longer the highest
+ * effective priority. MUST be called with interrupts enabled
+ * because we cannot preempt a thread that expects atomic
+ * operation. */
+void thread_preempt() {
+  enum intr_level old_level;
+  ASSERT(!intr_context());
+  old_level = intr_disable();
+
+  struct thread* cur = thread_current();
+
+  if(!list_empty(&prio_ready_list)) {
+    struct list_elem* front = list_front(&prio_ready_list);
+    struct thread* front_thread = list_entry(front, struct thread, elem);
+
+    if(front_thread->effective_priority > cur->effective_priority) {
+      // Yield?
+      if(cur != idle_thread)
+        thread_enqueue(cur);
+      cur->status = THREAD_READY;
+      schedule();
+    }
+  }
+  intr_set_level(old_level);
 }
 
 /* Sorting function used to sort threads by EFFECTIVE_PRIORITY. */
@@ -388,8 +409,8 @@ void thread_set_priority(int new_priority) {
   if(new_priority > t->effective_priority) {
     thread_set_eff_priority(t, new_priority);
   }
-
   intr_set_level(old_level);
+  thread_preempt();
 }
 
 
@@ -399,6 +420,8 @@ void thread_set_priority(int new_priority) {
  * needed. May be called on a waiting thread or a ready thread. However, this function
  * MUST be called with interrupts disabled. */
 void thread_set_eff_priority(struct thread* t, int new_priority) {
+  ASSERT(intr_get_level() == INTR_OFF);
+
   bool is_waiting = t->waiting != NULL;
   bool holds_locks = !list_empty(&t->locks);
 
@@ -431,7 +454,7 @@ static bool sort_needed(struct thread* t) {
   struct thread* curr_thread = t;
 
   if(list_empty(&prio_ready_list)) return false;
-  ASSERT(!list_empty(&prio_ready_list));
+
   struct list_elem* curr_thread_elem = &curr_thread->elem;
   struct list_elem* next_thread_elem = list_next(curr_thread_elem);
   struct list_elem* prev_thread_elem = list_prev(curr_thread_elem);
