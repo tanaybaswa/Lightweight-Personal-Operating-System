@@ -110,7 +110,7 @@ void sema_up(struct semaphore* sema) {
 
   old_level = intr_disable();
   if (!list_empty(&sema->waiters)) {
-    /* TODO: This doesn't seem to work. Fix. */
+    /* Wake up the thread with the highest priority. */
     list_sort(&sema->waiters, thread_prio_less, NULL);
     thread_unblock(list_entry(list_pop_front(&sema->waiters), struct thread, elem));
   }
