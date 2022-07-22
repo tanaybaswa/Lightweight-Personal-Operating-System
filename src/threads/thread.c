@@ -77,7 +77,6 @@ static struct thread* running_thread(void);
 static struct thread* next_thread_to_run(void);
 static struct thread* thread_schedule_fifo(void);
 static struct thread* thread_schedule_prio(void);
-static bool prio_less(const struct list_elem*, const struct list_elem*, void*);
 static struct thread* thread_schedule_fair(void);
 static struct thread* thread_schedule_mlfqs(void);
 static struct thread* thread_schedule_reserved(void);
@@ -268,7 +267,7 @@ static void thread_enqueue(struct thread* t) {
   if (active_sched_policy == SCHED_FIFO) {
     list_push_back(&fifo_ready_list, &t->elem);
   } else if(active_sched_policy == SCHED_PRIO) {
-    list_insert_ordered(&prio_ready_list, &t->elem, prio_less, NULL);
+    list_insert_ordered(&prio_ready_list, &t->elem, thread_prio_less, NULL);
   } else {
     PANIC("Unimplemented scheduling policy value: %d", active_sched_policy);
   }
@@ -301,7 +300,7 @@ void thread_preempt() {
 }
 
 /* Sorting function used to sort threads by EFFECTIVE_PRIORITY. */
-static bool prio_less(const struct list_elem* a, const struct list_elem* b, UNUSED void* aux) {
+bool thread_prio_less(const struct list_elem* a, const struct list_elem* b, UNUSED void* aux) {
   struct thread* ta = list_entry(a, struct thread, elem);
   struct thread* tb = list_entry(b, struct thread, elem);
   /* NOTE: Since priority is sorted greatest to least, we flip the sign. */
@@ -442,7 +441,7 @@ void thread_set_eff_priority(struct thread* t, int new_priority) {
 
   /* Update prio_ready_queue if T is in it. */
   if(!is_waiting && sort_needed(t))
-    list_sort(&prio_ready_list, prio_less, NULL);
+    list_sort(&prio_ready_list, thread_prio_less, NULL);
 }
 
 /* Returns whether the T's new priority requires
