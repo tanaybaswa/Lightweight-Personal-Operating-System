@@ -123,6 +123,9 @@ struct list {
 
 void list_init(struct list*);
 
+bool is_head(struct list_elem* elem);
+bool is_tail(struct list_elem* elem);
+
 /* List traversal. */
 struct list_elem* list_begin(struct list*);
 struct list_elem* list_next(struct list_elem*);
@@ -170,5 +173,10 @@ void list_unique(struct list*, struct list* duplicates, list_less_func*, void* a
 /* Max and min. */
 struct list_elem* list_max(struct list*, list_less_func*, void* aux);
 struct list_elem* list_min(struct list*, list_less_func*, void* aux);
+
+/* Random utility functions. Did not find a better place for these fellas
+ * (tried making a seperate file 'math.h' but the Makefile did not work). */
+int max(int, int);
+int min(int, int);
 
 #endif /* lib/kernel/list.h */
