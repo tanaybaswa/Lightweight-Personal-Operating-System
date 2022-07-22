@@ -279,7 +279,7 @@ static void thread_enqueue(struct thread* t) {
  * operation. */
 void thread_preempt() {
   enum intr_level old_level;
-  ASSERT(!intr_context());
+   ASSERT(!intr_context());
   old_level = intr_disable();
 
   struct thread* cur = thread_current();
