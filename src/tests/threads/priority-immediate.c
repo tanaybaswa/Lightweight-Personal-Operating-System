@@ -35,8 +35,9 @@ void test_priority_immediate(void) {
 static void acquire1_thread_func(void* lock_) {
   struct lock* lock = lock_;
   lock_acquire(lock);
+  msg("magic is still %d", magic);
   magic = 5;
-  msg("magic is %d", magic);
+  msg("magic is now %d", magic);
   lock_release(lock);
   msg("acquire1: done");
 }
