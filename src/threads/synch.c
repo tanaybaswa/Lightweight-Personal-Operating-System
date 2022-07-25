@@ -452,11 +452,14 @@ void rw_lock_release(struct rw_lock* rw_lock, bool reader) {
   lock_release(&rw_lock->lock);
 }
 
-/* One semaphore in a list. */
+/* One semaphore in a list.
 struct semaphore_elem {
-  struct list_elem elem;      /* List element. */
-  struct semaphore semaphore; /* This semaphore. */
+  struct list_elem elem;      /* List element. 
+  struct semaphore semaphore; /* This semaphore. 
+  int prio;
 };
+
+*/
 
 /* Initializes condition variable COND.  A condition variable
    allows one piece of code to signal a condition and cooperating
@@ -495,6 +498,8 @@ void cond_wait(struct condition* cond, struct lock* lock) {
   ASSERT(!intr_context());
   ASSERT(lock_held_by_current_thread(lock));
 
+  waiter.prio =  thread_current()->effective_priority;
+  
   sema_init(&waiter.semaphore, 0);
   list_push_back(&cond->waiters, &waiter.elem);
   lock_release(lock);
@@ -516,8 +521,8 @@ void cond_signal(struct condition* cond, struct lock* lock UNUSED) {
   ASSERT(lock_held_by_current_thread(lock));
 
   if (!list_empty(&cond->waiters)) {
-    /* TODO: This sort doesn't seem to work. Fix. */
-    list_sort(&cond->waiters, thread_prio_less, NULL);
+    
+    list_sort(&cond->waiters, cond_prio_less, NULL);
     sema_up(&list_entry(list_pop_front(&cond->waiters), struct semaphore_elem, elem)->semaphore);
   }
 }

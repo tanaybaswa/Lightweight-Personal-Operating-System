@@ -307,6 +307,15 @@ bool thread_prio_less(const struct list_elem* a, const struct list_elem* b, UNUS
   return ta->effective_priority > tb->effective_priority;
 }
 
+/* Sorting function used to sort threads by EFFECTIVE_PRIORITY. */
+bool cond_prio_less(const struct list_elem* a, const struct list_elem* b, UNUSED void* aux) {
+  struct semaphore_elem* ta = list_entry(a, struct semaphore_elem, elem);
+  struct semaphore_elem* tb = list_entry(b, struct semaphore_elem, elem);
+  /* NOTE: Since priority is sorted greatest to least, we flip the sign. */
+  return ta->prio > tb->prio;
+}
+
+
 
 /* Transitions a blocked thread T to the ready-to-run state.
    This is an error if T is not blocked.  (Use thread_yield() to
