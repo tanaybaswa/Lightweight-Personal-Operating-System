@@ -4,7 +4,6 @@
 #include <string.h>
 
 static const struct test threads_tests[] = {
-    {"priority-immediate", test_priority_immediate},
     {"alarm-single", test_alarm_single},
     {"alarm-multiple", test_alarm_multiple},
     {"alarm-simultaneous", test_alarm_simultaneous},
