@@ -4,20 +4,10 @@
 #include <list.h>
 #include <stdbool.h>
 
-typedef int tid_t;
-
 /* A counting semaphore. */
 struct semaphore {
   unsigned value;      /* Current value. */
   struct list waiters; /* List of waiting threads. */
-};
-
-
-/* Semaphore list element. */
-struct semaphore_elem {
-  struct list_elem elem;      /* List element. */
-  struct semaphore semaphore; /* This semaphore. */
-  int prio;                   /* Priority. */
 };
 
 void sema_init(struct semaphore*, unsigned value);
@@ -30,9 +20,6 @@ void sema_self_test(void);
 struct lock {
   struct thread* holder;      /* Thread holding lock (for debugging). */
   struct semaphore semaphore; /* Binary semaphore controlling access. */
-  struct list_elem elem; /* For thread that holds lock to use. */
-  int priority; /* Max. priority amongst waiters of lock. */
-  tid_t tid_priority; /* tid of thread waiting on lock with max. prio. */
 };
 
 void lock_init(struct lock*);
@@ -40,7 +27,6 @@ void lock_acquire(struct lock*);
 bool lock_try_acquire(struct lock*);
 void lock_release(struct lock*);
 bool lock_held_by_current_thread(const struct lock*);
-void lock_set_priority(struct lock*, tid_t, int);
 
 /* Condition variable. */
 struct condition {

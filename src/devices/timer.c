@@ -7,7 +7,6 @@
 #include "threads/interrupt.h"
 #include "threads/synch.h"
 #include "threads/thread.h"
-#include "lib/kernel/list.h"
 
 /* See [8254] for hardware details of the 8254 timer chip. */
 
@@ -20,8 +19,6 @@
 
 /* Number of timer ticks since OS booted. */
 static int64_t ticks;
-
-extern struct list sleep_thread_list; // keep track of sleeping threads
 
 /* Number of loops per timer tick.
    Initialized by timer_calibrate(). */
@@ -82,19 +79,8 @@ void timer_sleep(int64_t ticks) {
   int64_t start = timer_ticks();
 
   ASSERT(intr_get_level() == INTR_ON);
-  /* while (timer_elapsed(start) < ticks)
-    thread_yield(); */
-  
-  struct thread* cur = thread_current();
-  cur->sleep_start = start;
-  cur->sleep_duration = ticks;
-
-  enum intr_level old_level;
-  old_level = intr_disable();
-  list_push_back(&sleep_thread_list, &cur->sleep_elem);
-  thread_block();
-  intr_set_level(old_level);
-
+  while (timer_elapsed(start) < ticks)
+    thread_yield();
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
