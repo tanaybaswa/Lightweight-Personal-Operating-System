@@ -22,19 +22,8 @@
 #include "lib/kernel/hash.h"
 #include "lib/kernel/list.h"
 
-static struct rw_lock pcb_index_lock;
-static struct hash pcb_index;
-static void add_process(struct hash* map, pid_t pid, struct process* process);
-static void add_process_exit(struct hash* map, pid_t pid, int exit_val);
-
-static struct process* get_process(struct hash* map, pid_t pid);
-static int get_process_exit(struct hash* map, pid_t pid);
-static void remove_process(struct hash* map, pid_t pid);
-static void free_process(struct process* process, int exit_val);
-static struct process* init_process(void);
 static bool is_flag_on(uint8_t p_flags, uint8_t flag);
 static void set_flag(uint8_t* p_flags, uint8_t flag, int val);
-static bool is_process_in(struct hash* map, pid_t pid);
 
 
 static thread_func start_process NO_RETURN;
@@ -49,18 +38,21 @@ void userprog_init(void) {
   struct thread* t = thread_current();
   bool success;
 
+  /* Always use calloc to insure pcb->pagedir is NULL! */
+  t->pcb = calloc(sizeof(struct process), 1);
+  success = t->pcb != NULL;
+  t->pcb->flags = NO_FLAGS;
+  list_init(&t->pcb->children);
+  lock_init(&t->pcb->child_lock);
+  lock_init(&t->pcb->flag_lock);
+  sema_init(&t->pcb->blocked, 0);
+
   /* Allocate process control block
      It is imoprtant that this is a call to calloc and not malloc,
      so that t->pcb->pagedir is guaranteed to be NULL (the kernel's
      page directory) when t->pcb is assigned, because a timer interrupt
      can come at any time and activate our pagedir */
-  init_process();
-  //t->pcb = calloc(sizeof(struct process), 1);
-  success = t->pcb != NULL;
 
-  //rw_lock_acquire(&pcb_index_lock, false);
-  //add_process(&pcb_index, t->tid, t->pcb);
-  //rw_lock_release(&pcb_index_lock, false);
 
   /* Kill the kernel if we did not succeed */
   ASSERT(success);
@@ -72,6 +64,10 @@ void userprog_init(void) {
    process id, or TID_ERROR if the thread cannot be created. */
 pid_t process_execute(const char* argv) {
 #define MAX_FILE_NAME_LENGTH 32
+  struct thread_args* args = malloc(sizeof(struct thread_args));
+  if(args == NULL)
+    return -1;
+
   char* argv_copy, *save_ptr, *file_name;
   char file_name_buf[MAX_FILE_NAME_LENGTH]; 
   tid_t tid;
@@ -82,25 +78,27 @@ pid_t process_execute(const char* argv) {
   argv_copy = palloc_get_page(0);
   if (argv_copy == NULL)
     return TID_ERROR;
-  strlcpy(argv_copy, argv, PGSIZE);
 
-  /* Copy the name of file into file_name. */
+  strlcpy(argv_copy, argv, PGSIZE);
   strlcpy(file_name_buf, argv, MAX_FILE_NAME_LENGTH);
   file_name = strtok_r(file_name_buf, " ", &save_ptr);
 
+  args->parent = t->pcb;
+  args->argv = argv_copy;
+
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create(file_name, PRI_DEFAULT, start_process, argv_copy);
-  if (tid == TID_ERROR) {
+  tid = thread_create(file_name, PRI_DEFAULT, start_process, args);
+
+  if(tid == TID_ERROR) {
     palloc_free_page(argv_copy);
+    free(args);
     return -1;
   } else {
-    struct process* parent = t->pcb;
-    sema_down(&parent->blocked);
-    if(is_flag_on(parent->flags, CHILD_LOAD_SUCCESS)) {
-      add_process(&parent->children, tid, NULL); 
-    } else {
+    sema_down(&t->pcb->blocked);
+    lock_acquire(&t->pcb->flag_lock);
+    if(!is_flag_on(t->pcb->flags, CHILD_LOAD_SUCCESS))
       tid = -1;
-    }
+    lock_release(&t->pcb->flag_lock);
   }
 
 
@@ -111,17 +109,30 @@ pid_t process_execute(const char* argv) {
 /* A thread function that loads a user process and starts it
    running. */
 static void start_process(void* argv_) {
-  char* argv = (char*)argv_;
+  struct thread_args* args = (struct thread_args*)argv_;
+
+  char* argv = args->argv;
   struct intr_frame if_;
   struct thread* t = thread_current();
   bool success, pcb_success;
 
   /* Allocate process control block */
-  struct process* new_pcb = init_process();
+  struct process* new_pcb = malloc(sizeof(struct process));
   success = pcb_success = (new_pcb != NULL);
 
   /* Initialize interrupt frame and load executable. */
   if (success) {
+    new_pcb->pagedir = NULL;
+    t->pcb = new_pcb;
+    t->pcb->main_thread = t;
+    strlcpy(new_pcb->process_name, t->name, sizeof t->name);
+    new_pcb->flags = NO_FLAGS;
+    list_init(&new_pcb->children);
+    lock_init(&new_pcb->child_lock);
+    lock_init(&new_pcb->flag_lock);
+    sema_init(&new_pcb->blocked, 0);
+    memset(new_pcb->fd_table, 0, MAX_FD * sizeof(int));
+
     memset(&if_, 0, sizeof if_);
     if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
     if_.cs = SEL_UCSEG;
@@ -134,30 +145,31 @@ static void start_process(void* argv_) {
     // Avoid race where PCB is freed before t->pcb is set to NULL
     // If this happens, then an unfortuantely timed timer interrupt
     // can try to activate the pagedir, but it is now freed memory
-#define EXIT_FAILED_LOAD -2
-    free_process(new_pcb, EXIT_FAILED_LOAD);
-#undef EXIT_FAILED_LOAD
+
+    struct process* pcb_to_free = t->pcb;
+    t->pcb = NULL;
+    free(pcb_to_free);
   }
 
   /* Clean up. Exit on failure or jump to userspace */
-  palloc_free_page(argv);
-  rw_lock_acquire(&pcb_index_lock, true);
-  struct process* parent = get_process(&pcb_index, t->parent_tid);
-  if (!success) {
-    if(parent) {
-      set_flag(&parent->flags, CHILD_LOAD_SUCCESS, 0);
-      sema_up(&parent->blocked);
-    }
+  struct process* parent = args->parent;
+  palloc_free_page(args->argv);
+  free(args);
 
-    rw_lock_release(&pcb_index_lock, true);
+  lock_acquire(&parent->flag_lock);
+  set_flag(&parent->flags, CHILD_LOAD_SUCCESS, success == true);
+  lock_release(&parent->flag_lock);
+  if(!success) {
+    /* Allows parent to continue. */
+    sema_up(&parent->blocked);
     thread_exit();
-  }
-
-  if(parent) {
-    set_flag(&parent->flags, CHILD_LOAD_SUCCESS, 1);
+  } else {
+    /* Allows parent to continue. */
+    add_child_process(&parent->children, &parent->child_lock, t->pcb);
+    t->pcb->parent = parent;
     sema_up(&parent->blocked);
   }
-  rw_lock_release(&pcb_index_lock, true);
+
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -186,28 +198,40 @@ int process_wait(pid_t child_pid) {
   /* First, find the child process to wait on. */
   struct process* parent = thread_current()->pcb;
 
-  /* No need to lock, only parent adds to its list. */
-  if(is_process_in(&parent->children, child_pid)) {
+  struct process* child = NULL;
+  if((child = get_child_process(&parent->children, &parent->child_lock, child_pid)) != NULL) {
     parent->awaiting_id = child_pid;
+    lock_acquire(&parent->flag_lock);
     set_flag(&parent->flags, PROCESS_WAITING, 1);
-    rw_lock_acquire(&pcb_index_lock, true);
-    bool child_alive = is_process_in(&pcb_index, child_pid);
-    rw_lock_release(&pcb_index_lock, true);
+    lock_release(&parent->flag_lock);
 
-    if(child_alive) {
+    /* Two situations:
+    1. Child is dead. It will be a empty process with only a status
+       and exit code.
+    2. Child is alive and running. We wait for child to unblock us.
+    */
+
+    lock_acquire(&child->flag_lock);
+    bool child_dead = is_flag_on(child->flags, DEAD);
+    lock_release(&child->flag_lock);
+    if(!child_dead)
       sema_down(&parent->blocked);
-    }
 
-    remove_process(&parent->children, child_pid);
-    lock_acquire(&parent->exit_codes_lock);
-    int exit_val = get_process_exit(&parent->exit_codes, child_pid);
-    remove_process(&parent->exit_codes, child_pid);
-    lock_release(&parent->exit_codes_lock);
+    /* Get the return value and free the rest of child. */
+    int retval = child->exit_val;
+
+    remove_child_process(&parent->children, &parent->child_lock, child_pid);
+    struct thread* old_thread = child->main_thread;
+    free(child);
+    palloc_free_page(old_thread);
+    lock_acquire(&parent->flag_lock);
     set_flag(&parent->flags, PROCESS_WAITING, 0);
-    return exit_val;
+    lock_release(&parent->flag_lock);
+    return retval;
   }
   return -1;
 }
+
 
 /* Free the current process's resources. */
 void process_exit(int code) {
@@ -218,9 +242,64 @@ void process_exit(int code) {
     NOT_REACHED();
   }
 
-  free_process(cur->pcb, code);
+  uint32_t* pd = cur->pcb->pagedir;  
+  if(pd != NULL) {
+    cur->pcb->pagedir = NULL;
+    pagedir_activate(NULL);
+    pagedir_destroy(pd);
+  }
 
-  thread_exit();
+  struct process* child = cur->pcb;
+  cur->pcb = NULL;
+
+  /* Get parent. */
+  struct process* parent = child->parent;
+  child->exit_val = code;
+  for(int i = 0; i < MAX_FD; i++) {
+    if(child->fd_table[i] != NULL)
+      file_close(child->fd_table[i]);
+  }
+
+  lock_acquire(&child->flag_lock);
+  set_flag(&child->flags, DEAD, 1);
+  lock_release(&child->flag_lock);
+
+
+  /* Check if all our children are dead. If so, reap dead children.
+   * If need be, make recurse and make orphans of still alive children. */
+  struct list_elem* e;
+  for(e = list_begin(&child->children); e != list_end(&child->children); e = list_next(e)) {
+    struct process* target = list_entry(e, struct process, elem);
+    remove_child_process(&child->children, &child->child_lock, target->main_thread->tid);
+    lock_acquire(&target->flag_lock);
+    if(is_flag_on(target->flags, DEAD)) {
+      free(target);
+    } else {
+      set_flag(&target->flags, ORPHAN, 1);
+    }
+    lock_release(&target->flag_lock);
+  }
+
+  /* Check if parent is waiting. */
+  lock_acquire(&child->flag_lock);
+  if(!is_flag_on(child->flags, ORPHAN)) {
+    child->main_thread->can_delete = false;
+    /* TODO: Critical section. Must implement lock. */
+    lock_acquire(&parent->flag_lock);
+    bool is_parent_waiting = is_flag_on(parent->flags, PROCESS_WAITING) &&
+      parent->awaiting_id == cur->tid;
+    lock_release(&parent->flag_lock);
+
+    /* Parent is now in charge of freeing the child. */
+    if(is_parent_waiting)
+      sema_up(&parent->blocked);
+  } else {
+    /* Orphan must free itself. */
+    free(child);
+  }
+  lock_release(&child->flag_lock);
+
+  thread_exit();  
 }
 
 /* Sets up the CPU for running user code in the current
@@ -336,6 +415,7 @@ bool load(char* argv, void (**eip)(void), void** esp) {
     printf("load: %s: open failed\n", file_name);
     goto done;
   }
+  t->pcb->fd_table[0] = file;
 
   /* Read and verify executable header. */
   if (file_read(file, &ehdr, sizeof ehdr) != sizeof ehdr ||
@@ -406,7 +486,8 @@ bool load(char* argv, void (**eip)(void), void** esp) {
 
 done:
   /* We arrive here whether the load is successful or not. */
-  file_close(file);
+  if(file)
+    file_deny_write(file);
   return success;
 }
 
@@ -632,164 +713,9 @@ static int count_words(char* source) {
   return count;
 }
 
-/* Functions for for adding/removing/getting from a pcb HASH. */
-
-static bool pcb_less(const struct hash_elem* a, const struct hash_elem* b, void* aux);
-static unsigned pcb_hash(const struct hash_elem* e, void* aux);
-static void pcb_destructor(struct hash_elem* e, void* aux);
-
-
-bool init_pcb_index(void) {
-  rw_lock_init(&pcb_index_lock);
-  return hash_init(&pcb_index, pcb_hash, pcb_less, NULL);
-}
-
-
-static bool pcb_less(const struct hash_elem* a, const struct hash_elem* b, UNUSED void* aux) {
-  struct process_h* pa = hash_entry(a, struct process_h, hash_elem);
-  struct process_h* pb = hash_entry(b, struct process_h, hash_elem);
-  return pa->pid - pb->pid;
-}
-
-
-static unsigned pcb_hash(const struct hash_elem* e, UNUSED void* aux) {
-  struct process_h* p = hash_entry(e, struct process_h, hash_elem);
-  return p->pid;
-}
-
-
-static struct process* get_process(struct hash* map, pid_t pid) {
-  struct process_h temp;
-  temp.pid = pid;
-  struct hash_elem* e = hash_find(map, &temp.hash_elem);
-  if(!e) {
-    return NULL;
-  }
-  struct process_h* found = hash_entry(e, struct process_h, hash_elem);
-  return found->process;
-}
-
-static int get_process_exit(struct hash* map, pid_t pid) {
-  struct process_h temp;
-  temp.pid = pid;
-  struct hash_elem* e = hash_find(map, &temp.hash_elem);
-  if(!e) {
-#define EXIT_CODE_NOT_FOUND -3
-    return EXIT_CODE_NOT_FOUND;
-#undef EXIT_CODE_NOT_FOUND
-  }
-  struct process_h* found = hash_entry(e, struct process_h, hash_elem);
-  return found->exit_val;
-}
-
-
-
-
-static void add_process(struct hash* map, pid_t pid, struct process* process) {
-  struct process_h* temp = malloc(sizeof(struct process_h));
-  temp->pid = pid;
-  temp->process = process;
-  hash_insert(map, &temp->hash_elem);
-}
-
-static void add_process_exit(struct hash* map, pid_t pid, int exit_val) {
-  struct process_h* temp = malloc(sizeof(struct process_h));
-  temp->pid = pid;
-  temp->exit_val = exit_val;
-  hash_insert(map, &temp->hash_elem);
-}
-
-
-static bool is_process_in(struct hash* map, pid_t pid) {
-  struct process_h temp;
-  temp.pid = pid;
-  struct hash_elem* e = hash_find(map, &temp.hash_elem);
-  if(e) return true;
-  return false;
-}
-
-static void remove_process(struct hash* map, pid_t pid) {
-  struct process_h temp;
-  temp.pid = pid;
-  struct hash_elem* e = hash_delete(map, &temp.hash_elem);
-  struct process_h* p = hash_entry(e, struct process_h, hash_elem);
-  free(p);
-}
-
-/* Functions for initializing and freeing a process. */
-
-static struct process* init_process(void) {
-  struct thread* thread = thread_current();
-  struct process* new_process = NULL;
-
-  /* Always use calloc to insure pcb->pagedir is NULL! */
-  new_process = calloc(sizeof(struct process), 1);
-  if(!new_process) return NULL;
-
-  new_process->pagedir = NULL;
-  thread->pcb = new_process;
-  new_process->main_thread = thread;
-  strlcpy(new_process->process_name, thread->name, sizeof thread->name);
-  new_process->flags = NO_FLAGS;
-  lock_init(&new_process->exit_codes_lock);
-  sema_init(&new_process->blocked, 0);
-  hash_init(&new_process->children, pcb_hash, pcb_less, NULL);
-  hash_init(&new_process->exit_codes, pcb_hash, pcb_less, NULL);
-
-  rw_lock_acquire(&pcb_index_lock, false);
-  add_process(&pcb_index, thread->tid, new_process);
-  rw_lock_release(&pcb_index_lock, false);
-
-  return new_process;
-}
-
-static void free_process(struct process* process, int exit_val) {
-  struct thread* thread = thread_current();
-
-  rw_lock_acquire(&pcb_index_lock, false);
-
-  /* Get parent. */
-  pid_t parent_pid = thread->parent_tid;
-  struct process* parent = get_process(&pcb_index, parent_pid);
-  if(parent) {
-    /* Not necessary due to pcb_index_lock. But for good measure. */
-    lock_acquire(&parent->exit_codes_lock);
-    add_process_exit(&parent->exit_codes, thread->tid, exit_val);
-    lock_release(&parent->exit_codes_lock);
-
-    if(is_flag_on(parent->flags, PROCESS_WAITING) && parent->awaiting_id == thread->tid) {
-      sema_up(&parent->blocked);
-    } 
-  }
-
-  remove_process(&pcb_index, thread->tid);
-  rw_lock_release(&pcb_index_lock, false);
-
-  uint32_t* pd = process->pagedir;
-  if(pd != NULL) {
-    process->pagedir = NULL;
-    pagedir_activate(NULL);
-    pagedir_destroy(pd);
-  }
-
-  /* Lock not necessary because removed from PCB_INDEX. */
-  hash_destroy(&process->children, pcb_destructor);
-  hash_destroy(&process->exit_codes, pcb_destructor);
-
-  thread->pcb = NULL;
-  free(process);
-}
-
-static void pcb_destructor(struct hash_elem* e, UNUSED void* aux) {
-  struct process_h* p = hash_entry(e, struct process_h, hash_elem);
-  free(p);
-}
-
-
 static bool is_flag_on(uint8_t p_flags, uint8_t flag) {
   return (p_flags & flag) == flag;
 }
-
 
 static void set_flag(uint8_t* p_flags, uint8_t flag, int val) {
   if(!val) {
@@ -799,4 +725,36 @@ static void set_flag(uint8_t* p_flags, uint8_t flag, int val) {
     /* Turn flag on. */
     *p_flags = val | flag;
   }
+}
+
+void add_child_process(struct list* list, struct lock* lock, struct process* child) {
+  lock_acquire(lock);
+  list_push_back(list, &child->elem);
+  lock_release(lock);
+}
+
+struct process* get_child_process(struct list* list, struct lock* lock, pid_t pid) {
+  lock_acquire(lock);
+
+  struct list_elem* e;
+  for(e = list_begin(list); e != list_end(list); e = list_next(e)) {
+    struct process* process = list_entry(e, struct process, elem);
+    if(process->main_thread->tid == pid) {
+      lock_release(lock);
+      return process;
+    }
+  }
+
+  lock_release(lock);
+  return NULL;
+}
+
+void remove_child_process(struct list* list, struct lock* lock, pid_t pid) {
+  struct process* child = get_child_process(list, lock, pid);
+  if(child == NULL)
+    return;
+
+  lock_acquire(lock);
+  list_remove(&child->elem);
+  lock_release(lock);
 }

@@ -10,6 +10,7 @@
 // These defines will be used in Project 2: Multithreading
 #define MAX_STACK_PAGES (1 << 11)
 #define MAX_THREADS 127
+#define MAX_FD 32
 
 /* PIDs and TIDs are the same type. PID should be
    the TID of the main thread of the process */
@@ -30,19 +31,26 @@ struct process {
   char process_name[16];       /* Name of the main thread */
   struct thread* main_thread;  /* Pointer to main thread */
 
-  struct hash children;        /* Hash of pid_t/struct process*  */
-  struct hash exit_codes;      /* Hash of pid_t/int. */
-  struct lock exit_codes_lock; /* Lock used for exit_codes hash. */
+  struct lock child_lock;
+  struct list children;        /* Hash of pid_t/struct process*  */
   struct semaphore blocked;    /* Semaphore used for wait/exec func. calls. */
+  struct file* fd_table[MAX_FD];
 
   uint8_t flags;
+  struct lock flag_lock;
   pid_t awaiting_id;
+
+  struct list_elem elem;
+  struct process* parent;
+  int exit_val;
 };
 
 enum process_flags {
   NO_FLAGS = 0,
   CHILD_LOAD_SUCCESS = 1,
-  PROCESS_WAITING = 2
+  PROCESS_WAITING = 2,
+  DEAD = 4,
+  ORPHAN = 8
 };
 
 void userprog_init(void);
@@ -55,19 +63,14 @@ void process_activate(void);
 bool is_main_thread(struct thread*, struct process*);
 pid_t get_pid(struct process*);
 
-/*
- * Internal struct for using processes in a hash map.
- * Hashes a pid_t to a struct process*. Note that this
- * only functions because pids are unique.
- */
-struct process_h {
-  struct hash_elem hash_elem;
-  pid_t pid;
-  struct process* process;
-  int exit_val; 
+struct thread_args {
+  struct process* parent;
+  char* argv;
 };
 
-bool init_pcb_index(void);
+void add_child_process(struct list*, struct lock*, struct process*);
+struct process* get_child_process(struct list*, struct lock*, pid_t);
+void remove_child_process(struct list*, struct lock*, pid_t);
 
 
 #endif /* userprog/process.h */
