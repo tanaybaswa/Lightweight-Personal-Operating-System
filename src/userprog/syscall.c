@@ -14,10 +14,17 @@
 #include "threads/malloc.h"
 
 static struct lock filesyscall_lock; 
+static struct lock fd_tab_lock;
+static int next_fd = 3; // minimum fd start with 3
 
+static struct hash fd_table;
 
-static int get_next_fd(void);
-static struct file* get_file(int fd);
+typedef struct fd_hash_entry {
+  struct hash_elem hash_elem;
+  int fd;
+  struct file* file_ptr; 
+} fd_hash_entry_t;
+
 static void syscall_handler(struct intr_frame*);
 static void validate_stack(uint32_t* esp, int bytes, bool allow_rw);
 static bool create(const char* file, unsigned initial_size);
@@ -29,13 +36,28 @@ static int write(int fd, const void* buffer, unsigned size);
 static void seek(int fd, unsigned position);
 static unsigned tell(int fd);
 static void close(int fd);
+static struct file* fd_to_fptr(int fd);
 int sys_sum_to_e(int);
 
+static int get_next_fd(void);
 
+static unsigned filesys_hfunc(const struct hash_elem* e, UNUSED void* aux) {
+  struct fd_hash_entry* entry_ptr = hash_entry(e, struct fd_hash_entry, hash_elem);
+  int hash_value = hash_int(entry_ptr->fd);
+  return hash_value;
+}
+
+static bool filesys_less(const struct hash_elem* a, const struct hash_elem* b, UNUSED void* aux) {
+  int v1 = filesys_hfunc(a, NULL);
+  int v2 = filesys_hfunc(b, NULL);
+  return (v1 < v2);
+}
 
 void syscall_init(void) { 
   lock_init(&filesyscall_lock);
+  lock_init(&fd_tab_lock);
   intr_register_int(0x30, 3, INTR_ON, syscall_handler, "syscall");
+  hash_init(&fd_table, filesys_hfunc, filesys_less, NULL);
 }
 
 
@@ -218,6 +240,9 @@ static void validate_stack(uint32_t* esp, int bytes, bool allow_rw) {
 
 /* creates new file of initial_size bytes, return whether succesful or not */
 static bool create(const char* file, unsigned initial_size) {
+  if (file == NULL) {
+    return false;
+  }
   lock_acquire(&filesyscall_lock); 
   bool success = filesys_create(file, initial_size);
   lock_release(&filesyscall_lock);
@@ -233,103 +258,121 @@ static bool remove(const char* file) {
 }
 
 /* opens file, returns nonnegative file descriptor or -1 if failed to open */
-int open(const char* filename) {
-  struct file** fd_table = thread_current()->pcb->fd_table;
-  struct file* file;
+int open(const char* file) {
+  struct file* file_ptr;
+  int fd;
+  if (file == NULL) {
+    return -1;
+  } 
+  if (!is_user_vaddr(file)) {
+    return -1;
+  }
+  fd_hash_entry_t* fd_entry = (fd_hash_entry_t*) malloc(sizeof(fd_hash_entry_t));
+  if (fd_entry == NULL) {
+    return -1;
+  }
   lock_acquire(&filesyscall_lock);
-  file = filesys_open(filename);
+  file_ptr = filesys_open(file);
   lock_release(&filesyscall_lock);
   
-  if(file == NULL)
+  if (file_ptr != NULL) {
+    fd = get_next_fd();
+    // add to hash table
+    fd_entry->fd = fd;
+    fd_entry->file_ptr = file_ptr;
+    lock_acquire(&fd_tab_lock);
+    hash_insert(&fd_table, &fd_entry->hash_elem);
+    lock_release(&fd_tab_lock);
+    return fd;
+  } else {
+    free(fd_entry);
     return -1;
-
-  int fd = get_next_fd();
-  fd_table[fd] = file;
-  return fd;
+  }
 }
 
+struct file* fd_to_fptr(int fd) {
+  fd_hash_entry_t fd_entry_temp;
+  fd_entry_temp.fd = fd;
+  lock_acquire(&fd_tab_lock);
+  struct hash_elem* elem = hash_find(&fd_table, &fd_entry_temp.hash_elem);
+  lock_release(&fd_tab_lock);
+  if (elem == NULL) {
+    return NULL;
+  } 
+  fd_hash_entry_t* fd_entry = hash_entry(elem, fd_hash_entry_t, hash_elem);
+  return fd_entry->file_ptr;
+}
 
 int filesize(int fd) {
-  struct file* file = get_file(fd);
-  if(file == NULL)
+  struct file* f = fd_to_fptr(fd);
+  if (f == NULL) {
     return -1;
-
+  }
   lock_acquire(&filesyscall_lock);
-  int size = file_length(file);
+  int size = file_length(f);
   lock_release(&filesyscall_lock);
   return size;
 }
 
 int read(int fd, void* buffer, unsigned size) {
-  struct file* file = get_file(fd);
-  if (file == NULL)
+  struct file* f = fd_to_fptr(fd);
+  if (f == NULL) {
     return -1;
-
+  }
   lock_acquire(&filesyscall_lock);
-  int num_bytes_read = file_read(file, buffer, size);
+  int num_bytes_read = file_read(f, buffer, size);
   lock_release(&filesyscall_lock);
   return num_bytes_read;
 }
 
 /* writes size number of bytes from buffer, return num bytes written */
 int write(int fd, const void* buffer, unsigned size) {
-  struct file* file = get_file(fd);
-  if (file == NULL)
+  struct file* f = fd_to_fptr(fd);
+  if (f == NULL) {
     return -1;
-
+  }
   lock_acquire(&filesyscall_lock);
-  int num_bytes_written = file_write(file, buffer, size);
+  int num_bytes_written = file_write(f, buffer, size);
   lock_release(&filesyscall_lock);
   return num_bytes_written;
 }
 
 void seek(int fd, unsigned position) {
-  struct file* file = get_file(fd);
-  if (file == NULL)
+  struct file* f = fd_to_fptr(fd);
+  if (f == NULL) {
     return;
-
+  }
   lock_acquire(&filesyscall_lock);
-  file_seek(file, position);
+  file_seek(f, position);
   lock_release(&filesyscall_lock);
 }
 
-unsigned tell(int fd) {
-  struct file* file = get_file(fd);
-  if (file == NULL)
+unsigned tell (int fd) {
+  struct file* f = fd_to_fptr(fd);
+  if (f == NULL) {
     return 0;
-
+  }
   lock_acquire(&filesyscall_lock);
-  unsigned pos = file_tell(file);
+  unsigned pos = file_tell(f);
   lock_release(&filesyscall_lock);
   return pos;
 }
 
 void close(int fd) {
-  struct file** fd_table = thread_current()->pcb->fd_table;
-  struct file* file = get_file(fd);
-  if(file != NULL) {
-    lock_acquire(&filesyscall_lock);
-    file_close(file);
-    lock_release(&filesyscall_lock);
-    fd_table[fd] = NULL;
+  struct file* f = fd_to_fptr(fd);
+  if (f == NULL) {
+    return;
   }
+  lock_acquire(&filesyscall_lock);
+  file_close(f);
+  lock_release(&filesyscall_lock);
 }
 
-static int get_next_fd() {
-  struct file** fd_table = thread_current()->pcb->fd_table;
-
-  for(int i = 3; i < MAX_FD; i++) {
-    if(fd_table[i] == NULL)
-      return i;
-  }
-
-  return MAX_FD;
-  ASSERT(false && "No more availible file descriptors.");
+static int get_next_fd(void) {
+  lock_acquire(&filesyscall_lock);
+  int fd = next_fd;
+  next_fd++;
+  lock_release(&filesyscall_lock);
+  return fd;
 }
 
-static struct file* get_file(int fd) {
-  if(fd >= MAX_FD || fd < 3)
-    return NULL;
-  struct file** fd_table = thread_current()->pcb->fd_table;
-  return fd_table[fd];
-}
