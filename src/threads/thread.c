@@ -115,6 +115,7 @@ void thread_init(void) {
   init_thread(initial_thread, "main", PRI_DEFAULT, 0);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid();
+  initial_thread->can_delete = true;
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -190,6 +191,7 @@ tid_t thread_create(const char* name, int priority, thread_func* function, void*
   /* Initialize thread. */
   init_thread(t, name, priority, thread_current()->tid);
   tid = t->tid = allocate_tid();
+  t->can_delete = true;
 
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame(t, sizeof *kf);
@@ -429,7 +431,6 @@ static void init_thread(struct thread* t, const char* name, int priority, int pa
 
   memset(t, 0, sizeof *t);
   t->status = THREAD_BLOCKED;
-  t->parent_tid = parent_tid;
   strlcpy(t->name, name, sizeof t->name);
   t->stack = (uint8_t*)t + PGSIZE;
   t->priority = priority;
@@ -527,7 +528,7 @@ void thread_switch_tail(struct thread* prev) {
      pull out the rug under itself.  (We don't free
      initial_thread because its memory was not obtained via
      palloc().) */
-  if (prev != NULL && prev->status == THREAD_DYING && prev != initial_thread) {
+  if (prev != NULL && prev->status == THREAD_DYING && prev != initial_thread && prev->can_delete) {
     ASSERT(prev != cur);
     palloc_free_page(prev);
   }
