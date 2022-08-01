@@ -84,7 +84,6 @@ typedef int tid_t;
 struct thread {
   /* Owned by thread.c. */
   tid_t tid;                 /* Thread identifier. */
-  bool can_delete;
   enum thread_status status; /* Thread state. */
   char name[16];             /* Name (for debugging purposes). */
   uint8_t* stack;            /* Saved stack pointer. */

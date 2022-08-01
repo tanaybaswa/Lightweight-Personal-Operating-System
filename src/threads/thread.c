@@ -53,7 +53,7 @@ static long long user_ticks;   /* # of timer ticks in user programs. */
 #define TIME_SLICE 4          /* # of timer ticks to give each thread. */
 static unsigned thread_ticks; /* # of timer ticks since last yield. */
 
-static void init_thread(struct thread*, const char* name, int priority, int parent_pid);
+static void init_thread(struct thread*, const char* name, int priority);
 static bool is_thread(struct thread*) UNUSED;
 static void* alloc_frame(struct thread*, size_t size);
 static void schedule(void);
@@ -112,10 +112,9 @@ void thread_init(void) {
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread();
-  init_thread(initial_thread, "main", PRI_DEFAULT, 0);
+  init_thread(initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid();
-  initial_thread->can_delete = true;
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -189,9 +188,8 @@ tid_t thread_create(const char* name, int priority, thread_func* function, void*
     return TID_ERROR;
 
   /* Initialize thread. */
-  init_thread(t, name, priority, thread_current()->tid);
+  init_thread(t, name, priority);
   tid = t->tid = allocate_tid();
-  t->can_delete = true;
 
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame(t, sizeof *kf);
@@ -204,13 +202,9 @@ tid_t thread_create(const char* name, int priority, thread_func* function, void*
   ef->eip = (void (*)(void))kernel_thread;
 
   /* Stack frame for switch_threads(). */
-  //printf("%d\n\n\n\n\n\n", sizeof *sf);
   sf = alloc_frame(t, sizeof *sf);
   sf->eip = switch_entry;
   sf->ebp = 0;
-
-  char fpu[108];
-  asm volatile("fsave (%0); fninit; fsave (%1); frstor (%0)" : : "g"(&fpu), "g"(&sf->fpu) : "memory");
 
   /* Add to run queue. */
   thread_unblock(t);
@@ -422,7 +416,7 @@ static bool is_thread(struct thread* t) { return t != NULL && t->magic == THREAD
 
 /* Does basic initialization of T as a blocked thread named
    NAME. */
-static void init_thread(struct thread* t, const char* name, int priority, int parent_tid) {
+static void init_thread(struct thread* t, const char* name, int priority) {
   enum intr_level old_level;
 
   ASSERT(t != NULL);
@@ -528,7 +522,7 @@ void thread_switch_tail(struct thread* prev) {
      pull out the rug under itself.  (We don't free
      initial_thread because its memory was not obtained via
      palloc().) */
-  if (prev != NULL && prev->status == THREAD_DYING && prev != initial_thread && prev->can_delete) {
+  if (prev != NULL && prev->status == THREAD_DYING && prev != initial_thread) {
     ASSERT(prev != cur);
     palloc_free_page(prev);
   }
