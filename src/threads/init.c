@@ -61,6 +61,7 @@ static const char* swap_bdev_name;
 static size_t user_page_limit = SIZE_MAX;
 
 static void bss_init(void);
+static inline void fp_init(void);
 static void paging_init(void);
 
 static char** read_command_line(void);
@@ -79,6 +80,9 @@ int main(void) {
 
   /* Clear BSS. */
   bss_init();
+
+  /* Floating Point Initialization */
+  fp_init();
 
   /* Break command line into arguments and parse options. */
   argv = read_command_line();
@@ -150,6 +154,9 @@ static void bss_init(void) {
   extern char _start_bss, _end_bss;
   memset(&_start_bss, 0, &_end_bss - &_start_bss);
 }
+
+/* Initialize the x87 FPU by calling the fninit instruction */
+static inline void fp_init(void) { asm("fninit"); }
 
 /* Populates the base page directory and page table with the
    kernel virtual mapping, and then sets up the CPU to use the

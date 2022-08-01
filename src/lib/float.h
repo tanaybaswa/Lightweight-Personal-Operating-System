@@ -19,6 +19,12 @@ static inline int fpu_pop(void) {
   return val;
 }
 
+/* Stores a clean copy of the FPU to a 108B memory location DEST.
+   Uses a 108B memory location BUF as a temporary storage */
+static inline void fpu_save_init(void* dest, void* buf) {
+  asm volatile("fsave (%0); fninit; fsave (%1); frstor (%2)" : : "r"(buf), "r"(dest), "r"(buf));
+}
+
 int sys_sum_to_e(int);
 double sum_to_e(int);
 double abs_val(double);

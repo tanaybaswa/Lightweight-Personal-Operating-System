@@ -1,5 +1,6 @@
 #include "threads/thread.h"
 #include <debug.h>
+#include <float.h>
 #include <stddef.h>
 #include <random.h>
 #include <stdio.h>
@@ -13,6 +14,7 @@
 #include "threads/vaddr.h"
 #ifdef USERPROG
 #include "userprog/process.h"
+#include "userprog/syscall.h"
 #endif
 
 /* Random value for struct thread's `magic' member.
@@ -178,6 +180,7 @@ tid_t thread_create(const char* name, int priority, thread_func* function, void*
   struct kernel_thread_frame* kf;
   struct switch_entry_frame* ef;
   struct switch_threads_frame* sf;
+  uint32_t fpu_curr[27];
   tid_t tid;
 
   ASSERT(function != NULL);
@@ -203,6 +206,7 @@ tid_t thread_create(const char* name, int priority, thread_func* function, void*
 
   /* Stack frame for switch_threads(). */
   sf = alloc_frame(t, sizeof *sf);
+  fpu_save_init(&sf->fpu, &fpu_curr);
   sf->eip = switch_entry;
   sf->ebp = 0;
 
