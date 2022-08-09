@@ -33,6 +33,11 @@ struct inode {
   struct inode_disk data; /* Inode content. */
 };
 
+/* Buffer cache for inode/file data. */
+struct buffer_cache buffer_cache;
+
+
+
 /* Returns the block device sector that contains byte offset POS
    within INODE.
    Returns -1 if INODE does not contain data for a byte at offset
@@ -183,8 +188,11 @@ off_t inode_read_at(struct inode* inode, void* buffer_, off_t size, off_t offset
       break;
 
     if (sector_ofs == 0 && chunk_size == BLOCK_SECTOR_SIZE) {
+
       /* Read full sector directly into caller's buffer. */
+      //struct buffer_block = buffer_cache_get(sector_idx, true);
       block_read(fs_device, sector_idx, buffer + bytes_read);
+
     } else {
       /* Read sector into bounce buffer, then partially copy
              into caller's buffer. */
@@ -285,3 +293,129 @@ void inode_allow_write(struct inode* inode) {
 
 /* Returns the length, in bytes, of INODE's data. */
 off_t inode_length(const struct inode* inode) { return inode->data.length; }
+
+
+/* Buffer cache functions. */
+
+static struct hash_elem* buffer_cache_fetch(block_sector_t id);
+static void buffer_cache_lru_update(struct buffer_block* search_key);
+static void buffer_cache_lru_evict(void);
+
+static unsigned buffer_cache_hash_func(const struct hash_elem* e, UNUSED void* aux);
+static bool buffer_cache_less_func(const struct hash_elem* a, const struct hash_elem* b, UNUSED void* aux);
+
+void buffer_cache_init() {
+  hash_init(&buffer_cache.map, buffer_cache_hash_func, buffer_cache_less_func, NULL);
+  list_init(&buffer_cache.lru);
+  lock_init(&buffer_cache.lock);
+}
+
+static unsigned buffer_cache_hash_func(const struct hash_elem* e, UNUSED void* aux) {
+  struct buffer_block* buffer_block = hash_entry(e, struct buffer_block, helem);
+  return hash_int(buffer_block->id);
+}
+
+static bool buffer_cache_less_func(const struct hash_elem* a, const struct hash_elem* b, UNUSED void* aux) {
+  struct buffer_block* block_a = hash_entry(a, struct buffer_block, helem);
+  struct buffer_block* block_b = hash_entry(b, struct buffer_block, helem);
+  return block_a->id < block_b->id;
+}
+
+struct buffer_block* buffer_cache_get(block_sector_t id, bool reader) {
+  lock_acquire(&buffer_cache.lock);
+
+  /* If requesting a block that is being fetched, wait. */
+  while(buffer_cache.fetching_id == id) {
+    cond_wait(&buffer_cache.fetching, &buffer_cache.lock);
+  }
+
+  /* Create a temporary hash_elem to search for ID. */
+  struct buffer_block search_key;
+  search_key.id = id;
+
+  /* Search for ID in the buffer cache's map. */
+  struct hash_elem* buffer_block_helem = hash_find(&buffer_cache.map, &search_key.helem);
+  if(buffer_block_helem == NULL) {
+    /* Bring the block into the buffer cache. */
+    buffer_block_helem = buffer_cache_fetch(id);
+
+    /* Block should now be in case. If not, kernel bug. */
+    //ASSERT(buffer_block_helem != NULL);
+    //ASSERT(hash_find(&buffer_cache.map, &hash_data);
+  } else {
+    /* Update the buffer cache's LRU. */
+    buffer_cache_lru_update(&search_key);
+  }
+
+  /* Attempt to acquire the block's rw_lock, depending on READER flag. */
+  struct buffer_block* buffer_block = hash_entry(buffer_block_helem, struct buffer_block, helem);
+
+  /* This lock should only be held very briefly, so its ok to block with buffer cache lock. */
+  lock_acquire(&buffer_block->ref_count_lock);
+  buffer_block->ref_count += 1;
+  buffer_block->dirty = buffer_block->dirty || !reader;
+  lock_release(&buffer_block->ref_count_lock);
+
+  lock_release(&buffer_cache.lock);
+
+  /* We acquire the buffer block rw_lock here in order to not block the buffer cache. */
+  rw_lock_acquire(&buffer_block->rw_lock, reader);
+  return buffer_block;
+}
+
+static struct hash_elem* buffer_cache_fetch(block_sector_t id) {
+  /* Wait for buffer cache to finish fetching block. */
+  while(buffer_cache.is_fetching) {
+    cond_wait(&buffer_cache.fetching, &buffer_cache.lock);
+  }
+
+  /* Prevents buffer cache from fetching same block or fetching at same time. */
+  buffer_cache.is_fetching = true;
+  buffer_cache.fetching_id = id;
+
+  /* Initialize the block we are fetching. */
+  struct buffer_block* buffer_block = malloc(sizeof(struct buffer_block));
+  buffer_block->id = id;
+  rw_lock_init(&buffer_block->rw_lock);
+  lock_init(&buffer_block->ref_count_lock);
+  buffer_block->ref_count = 0;
+  buffer_block->dirty = false;
+
+  /* Release lock and fetch. Fetching is long. */
+  lock_release(&buffer_cache.lock);
+  block_read(fs_device, id, buffer_block->data);
+  lock_acquire(&buffer_cache.lock);
+
+  /* Add the new block into map and LRU. */
+  hash_insert(&buffer_cache.map, &buffer_block->helem);
+
+  if(list_size(&buffer_cache.lru) >= MAX_BUFFERS_CACHED) {
+    buffer_cache_lru_evict();
+  }
+
+  list_push_front(&buffer_cache.lru, &buffer_block->lelem);
+
+  return &buffer_block->helem;
+}
+
+static void buffer_cache_lru_update(struct buffer_block* key_info) {
+  struct hash_elem* buffer_block_helem = hash_find(&buffer_cache.map, &key_info->helem);
+  struct buffer_block* buffer_block = hash_entry(buffer_block_helem, struct buffer_block, helem);
+
+  list_remove(&buffer_block->lelem);
+  list_push_front(&buffer_cache.lru, &buffer_block->lelem);
+  return;
+}
+
+static void buffer_cache_lru_evict() {
+  /* Evict the tail of the LRU. */
+  struct list_elem* tail_lelem = list_pop_back(&buffer_cache.lru);
+  struct buffer_block* buffer_block = list_entry(tail_lelem, struct buffer_block, lelem);
+
+  hash_delete(&buffer_cache.map, &buffer_block->helem);
+
+  // TODO: Fix kernel bug where if the LRU tail is still in use, using thread now has a invalid pointer.
+  free(buffer_block);
+
+  return;
+}
