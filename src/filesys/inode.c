@@ -3,6 +3,7 @@
 #include <debug.h>
 #include <round.h>
 #include <string.h>
+#include <stdio.h>
 #include "filesys/filesys.h"
 #include "filesys/free-map.h"
 #include "threads/malloc.h"
@@ -187,23 +188,24 @@ off_t inode_read_at(struct inode* inode, void* buffer_, off_t size, off_t offset
     if (chunk_size <= 0)
       break;
 
+    struct buffer_block* buffer_block = buffer_cache_get(sector_idx, true);
+
     if (sector_ofs == 0 && chunk_size == BLOCK_SECTOR_SIZE) {
 
       /* Read full sector directly into caller's buffer. */
-      //struct buffer_block = buffer_cache_get(sector_idx, true);
-      block_read(fs_device, sector_idx, buffer + bytes_read);
+      memcpy(buffer + bytes_read, buffer_block->data, chunk_size); 
+      //block_read(fs_device, sector_idx, bb->data + bytes_read);
 
     } else {
-      /* Read sector into bounce buffer, then partially copy
-             into caller's buffer. */
-      if (bounce == NULL) {
-        bounce = malloc(BLOCK_SECTOR_SIZE);
-        if (bounce == NULL)
-          break;
-      }
-      block_read(fs_device, sector_idx, bounce);
-      memcpy(buffer + bytes_read, bounce + sector_ofs, chunk_size);
+
+      //block_read(fs_device, sector_idx, bounce);
+      memcpy(buffer + bytes_read, buffer_block->data + sector_ofs, chunk_size);
     }
+
+    rw_lock_release(&buffer_block->rw_lock, true);
+    lock_acquire(&buffer_block->ref_count_lock);
+    buffer_block->ref_count -= 1;
+    lock_release(&buffer_block->ref_count_lock);
 
     /* Advance. */
     size -= chunk_size;
@@ -308,6 +310,9 @@ void buffer_cache_init() {
   hash_init(&buffer_cache.map, buffer_cache_hash_func, buffer_cache_less_func, NULL);
   list_init(&buffer_cache.lru);
   lock_init(&buffer_cache.lock);
+  cond_init(&buffer_cache.fetching);
+  buffer_cache.fetching_id = 0;
+  buffer_cache.is_fetching = false;
 }
 
 static unsigned buffer_cache_hash_func(const struct hash_elem* e, UNUSED void* aux) {
@@ -322,6 +327,7 @@ static bool buffer_cache_less_func(const struct hash_elem* a, const struct hash_
 }
 
 struct buffer_block* buffer_cache_get(block_sector_t id, bool reader) {
+  printf("Getting block %d.\n", id);
   lock_acquire(&buffer_cache.lock);
 
   /* If requesting a block that is being fetched, wait. */
@@ -329,6 +335,7 @@ struct buffer_block* buffer_cache_get(block_sector_t id, bool reader) {
     cond_wait(&buffer_cache.fetching, &buffer_cache.lock);
   }
 
+  printf("Searching for block in cache.\n");
   /* Create a temporary hash_elem to search for ID. */
   struct buffer_block search_key;
   search_key.id = id;
@@ -336,6 +343,7 @@ struct buffer_block* buffer_cache_get(block_sector_t id, bool reader) {
   /* Search for ID in the buffer cache's map. */
   struct hash_elem* buffer_block_helem = hash_find(&buffer_cache.map, &search_key.helem);
   if(buffer_block_helem == NULL) {
+    printf("Block not found in cache. Fetching block.\n");
     /* Bring the block into the buffer cache. */
     buffer_block_helem = buffer_cache_fetch(id);
 
@@ -344,6 +352,7 @@ struct buffer_block* buffer_cache_get(block_sector_t id, bool reader) {
     //ASSERT(hash_find(&buffer_cache.map, &hash_data);
   } else {
     /* Update the buffer cache's LRU. */
+    printf("Block found in cache. Updating block.\n");
     buffer_cache_lru_update(&search_key);
   }
 
@@ -366,8 +375,11 @@ struct buffer_block* buffer_cache_get(block_sector_t id, bool reader) {
 static struct hash_elem* buffer_cache_fetch(block_sector_t id) {
   /* Wait for buffer cache to finish fetching block. */
   while(buffer_cache.is_fetching) {
+    printf("Waiting for cache to finish fetching block %d.\n", buffer_cache.fetching_id);
     cond_wait(&buffer_cache.fetching, &buffer_cache.lock);
   }
+
+  printf("Fetching block %d from disk.\n", id);
 
   /* Prevents buffer cache from fetching same block or fetching at same time. */
   buffer_cache.is_fetching = true;
@@ -385,6 +397,10 @@ static struct hash_elem* buffer_cache_fetch(block_sector_t id) {
   lock_release(&buffer_cache.lock);
   block_read(fs_device, id, buffer_block->data);
   lock_acquire(&buffer_cache.lock);
+
+  printf("Finished fetching block from disk.\n");
+  buffer_cache.is_fetching = false;
+  buffer_cache.fetching_id = 0;
 
   /* Add the new block into map and LRU. */
   hash_insert(&buffer_cache.map, &buffer_block->helem);
@@ -411,6 +427,7 @@ static void buffer_cache_lru_evict() {
   /* Evict the tail of the LRU. */
   struct list_elem* tail_lelem = list_pop_back(&buffer_cache.lru);
   struct buffer_block* buffer_block = list_entry(tail_lelem, struct buffer_block, lelem);
+  printf("Evicting block %d from cache.\n", buffer_block->id);
 
   hash_delete(&buffer_cache.map, &buffer_block->helem);
 
