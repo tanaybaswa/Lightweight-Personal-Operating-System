@@ -22,6 +22,11 @@ off_t inode_write_at(struct inode*, const void*, off_t size, off_t offset);
 void inode_deny_write(struct inode*);
 void inode_allow_write(struct inode*);
 off_t inode_length(const struct inode*);
+struct inode_disk* get_disk_inode(const struct inode *inode);
+size_t inode_allocate(struct inode_disk* inode, size_t start, size_t stop);
+void inode_deallocate(struct inode_disk* inode, size_t start, size_t stop);
+void inode_lock_acquire(struct inode* inode);
+void inode_lock_release(struct inode* inode);
 
 /* Buffer cache definitions/structs. */
 
