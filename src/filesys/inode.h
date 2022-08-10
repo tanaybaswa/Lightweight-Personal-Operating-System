@@ -8,6 +8,16 @@
 #include "lib/kernel/hash.h"
 #include "threads/synch.h"
 
+/* Identifies an inode. */
+#define INODE_MAGIC 0x494e4f44
+
+/* Number of direct pointers in an inode. (Subject to change to 
+   to accomodate metadata.) */
+#define NUM_DIRECT 122
+
+/* Number of pointers in an indirect inode. */
+#define NUM_INDIRECT 128
+
 struct bitmap;
 
 /* On-disk inode.
@@ -20,8 +30,6 @@ struct inode_disk {
   unsigned magic;                    /* Magic number. */
   bool is_dir;                       /* Determines whether inode is a directory or file */
   struct dir_entry* dir_entry;       /* Pointer to inode's dir_entry; NULL if inode is a file */
-  uint32_t unused[121];              /* Not used.*/
-  uint8_t unused[3];
 };
 
 /* In-memory inode. */

@@ -307,9 +307,11 @@ int file_dir_inode(char** path, struct dir** last_dir, struct inode** ret_in, ch
     }
     exist = dir_lookup(curr_dir, part, &in);
     if (exist) {
-      if (in->data.is_dir) {
+      struct inode_disk* ind = get_disk_inode(in);
+      if (ind->is_dir) {
         curr_dir = dir_open(in);
       }
+      free(ind);
     } else { // check if this is last part
       if (get_next_part(part, path) == 0) {
         // last part is valid and does not exist
@@ -350,7 +352,10 @@ struct dir* make_and_add_dir(struct dir* curr_dir, char* name, block_sector_t in
     free_map_release(in_sector, 1);
     return NULL;
   }
-  new_in->data.is_dir = true;
+
+  struct inode_disk* ind = get_disk_inode(new_in);
+
+  ind->is_dir = true;
 
   // use inode to get directory
   new_dir = dir_open(new_in);
