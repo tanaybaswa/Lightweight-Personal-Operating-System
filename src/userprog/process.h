@@ -37,6 +37,8 @@ struct process {
   /* Owned by syscall.c. */
   struct list fds; /* List of file descriptors. */
   int next_handle; /* Next handle value. */
+
+  struct dir* cwd; /* A pointer to the process's current working directory */
 };
 
 /* Tracks the completion of a process.
@@ -58,6 +60,8 @@ struct file_descriptor {
   struct list_elem elem; /* List element. */
   struct file* file;     /* File. */
   int handle;            /* File handle. */
+  bool is_dir;           /* Determines whether fd is a directory or a file */
+  struct dir* dir;       /* A pointer to the dir for the directory; NULL if it's a file */
 };
 
 void userprog_init(void);

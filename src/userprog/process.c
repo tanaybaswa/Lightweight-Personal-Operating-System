@@ -69,6 +69,10 @@ pid_t process_execute(const char* file_name) {
   char* save_ptr;
   tid_t tid;
 
+  //get previous thread prior to creating new thread
+  struct thread* prev_thread = thread_current();
+  struct dir* parent_dir = prev_thread->pcb->cwd;
+
   /* Initialize exec_info. */
   exec.file_name = file_name;
   sema_init(&exec.load_done, 0);
@@ -79,9 +83,13 @@ pid_t process_execute(const char* file_name) {
   tid = thread_create(thread_name, PRI_DEFAULT, start_process, &exec);
   if (tid != TID_ERROR) {
     sema_down(&exec.load_done);
-    if (exec.success)
+    if (exec.success) {
       list_push_back(&thread_current()->pcb->children, &exec.wait_status->elem);
-    else
+
+      // set this proccess's cwd to be parent's cwd
+      struct thread* new_thread = thread_current();
+      new_thread->pcb->cwd = parent_dir;
+    } else
       tid = TID_ERROR;
   }
 
@@ -115,7 +123,10 @@ static void start_process(void* exec_) {
     t->pcb->next_handle = 2;
     t->pcb->main_thread = t;
     strlcpy(t->pcb->process_name, t->name, sizeof t->name);
-  }
+
+    //set CWD to root directory
+    t->pcb->cwd = dir_open_root();
+    }
 
   /* Allocate wait_status. */
   if (success) {
