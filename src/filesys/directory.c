@@ -5,11 +5,14 @@
 #include "filesys/filesys.h"
 #include "filesys/inode.h"
 #include "threads/malloc.h"
+#include "threads/thread.h"
+#include "userprog/process.h"
 
 /* A directory. */
 struct dir {
-  struct inode* inode; /* Backing store. */
-  off_t pos;           /* Current position. */
+  struct inode* inode;      /* Backing store. */
+  off_t pos;                /* Current position. */
+  struct dir_entry* parent; /* Directory's parent directory */
 };
 
 /* A single directory entry. */
@@ -17,6 +20,8 @@ struct dir_entry {
   block_sector_t inode_sector; /* Sector number of header. */
   char name[NAME_MAX + 1];     /* Null terminated file name. */
   bool in_use;                 /* In use or free? */
+  struct dir* sub_dir;         /* Pointer to subdirectory; NULL if dir_entry is a file */
+  bool is_dir;                 /* Determines whether it's a directory or a file */
 };
 
 /* Creates a directory with space for ENTRY_CNT entries in the
@@ -198,4 +203,234 @@ bool dir_readdir(struct dir* dir, char name[NAME_MAX + 1]) {
     }
   }
   return false;
+}
+
+/* Extracts a file name part from *SRCP into PART, and updates *SRCP so that the
+   next call will return the next file name part. Returns 1 if successful, 0 at
+   end of string, -1 for a too-long file name part. */
+static int get_next_part(char part[NAME_MAX + 1], const char** srcp) {
+  const char* src = *srcp;
+  char* dst = part;
+
+  /* Skip leading slashes.  If it's all slashes, we're done. */
+  while (*src == '/')
+    src++;
+  if (*src == '\0')
+    return 0;
+
+  /* Copy up to NAME_MAX character from SRC to DST.  Add null terminator. */
+  while (*src != '/' && *src != '\0') {
+    if (dst < part + NAME_MAX)
+      *dst++ = *src;
+    else
+      return -1;
+    src++;
+  }
+  *dst = '\0';
+
+  /* Advance source pointer. */
+  *srcp = src;
+  return 1;
+}
+
+// /* Return the proper directory corresponding to the relative path or absolute path passed in */
+// static struct dir* path_resolution(char* path) {
+//   char* kfile = copy_in_string(path);
+//   char* curr;
+//   struct dir* directory;
+
+//   struct thread* curr_thread = thread_current();
+
+//   while (curr = get_next_part(curr, &kfile) == 1) {
+//     if (curr == "/") {
+//       return dir_open_root();
+//     }
+//     directory = dir_reopen();
+//   }
+
+//   palloc_free_page(kfile);
+//   return NULL;
+// }
+
+// /* Changes cwd of current process to DIR */
+// bool chdir(const char* dir) {
+//   ASSERT(dir != NULL);
+//   struct dir* new_dir = path_resolution(dir);
+//   if (new_dir == NULL)
+//     return false;
+//   struct thread* curr_thread = current_thread();
+//   curr_thread->pcb->cwd = new_dir;
+//   return true;
+// }
+
+struct dir* start_dir(char* path) {
+  if (*path == '/') {
+    // absolute path
+    return dir_open_root();
+  } else {
+    // relative path from current directory
+    struct thread* cur = thread_current();
+    if (cur->pcb->cwd == NULL) {
+      return dir_open_root();
+    } else {
+      return cur->pcb->cwd;
+    }
+  }
+}
+
+/* Returns 1 if found, 0 if not found, -1 if error */
+int file_dir_inode(char** path, struct dir** last_dir, struct inode** ret_in, char** name) {
+  struct dir* curr_dir = start_dir(*path);
+  char* part = malloc(NAME_MAX + 1);
+  if (part == NULL) {
+    return false;
+  }
+  struct inode* in = NULL;
+  bool exist = false;
+  int ret = 1;
+  int found = -1;
+  *ret_in = NULL;
+  *name = NULL;
+
+  while (ret != 0) {
+    *last_dir = curr_dir;
+    ret = get_next_part(part, path);
+    if (ret == -1) {
+      free(part);
+      break;
+    }
+    if (ret == 0) {
+      *ret_in = in;
+      *name = part;
+      found = 1;
+      break;
+    }
+    exist = dir_lookup(curr_dir, part, &in);
+    if (exist) {
+      struct inode_disk* ind = get_disk_inode(in);
+      if (ind->is_dir) {
+        curr_dir = dir_open(in);
+      }
+      free(ind);
+    } else { // check if this is last part
+      if (get_next_part(part, path) == 0) {
+        // last part is valid and does not exist
+        *name = part;
+        found = 0;
+      } else {
+        // invalid path
+        free(part);
+      }
+      break;
+    }
+  }
+  return found;
+}
+
+struct dir* make_and_add_dir(struct dir* curr_dir, char* name, block_sector_t in_sector) {
+  bool added, created;
+  struct inode* new_in;
+  struct dir* new_dir;
+
+  // adding new directory entry to current directory
+  added = dir_add(curr_dir, name, in_sector);
+  if (added == false) {
+    free_map_release(in_sector, 1);
+    return NULL;
+  }
+
+  // create new sub-directory
+  created = dir_create(in_sector, 2);
+  if (created == false) {
+    free_map_release(in_sector, 1);
+    return NULL;
+  }
+
+  // use inode sector to get new inode
+  new_in = inode_open(in_sector);
+  if (new_in == NULL) {
+    free_map_release(in_sector, 1);
+    return NULL;
+  }
+
+  struct inode_disk* ind = get_disk_inode(new_in);
+
+  ind->is_dir = true;
+
+  // use inode to get directory
+  new_dir = dir_open(new_in);
+  if (new_dir == NULL) {
+    free_map_release(in_sector, 1);
+    return NULL;
+  }
+
+  return new_dir;
+}
+
+/* Creates directory named dir, which may be relative or absolute. Returns true if successful, false on failure */
+bool mkdir(const char* dir) {
+  struct dir* curr_dir;
+  struct dir* new_dir;
+  struct inode* in;
+  int found;
+  bool allocated, added;
+  char* name;
+  block_sector_t in_sector;
+
+  found = file_dir_inode(&dir, &curr_dir, &in, &name);
+
+  if (found == 1 || found == -1) {
+    return false;
+  }
+
+  // add new directory to current dirrectory
+  allocated = free_map_allocate(1, &in_sector);
+  if (allocated == false) {
+    return false;
+  }
+  new_dir = make_and_add_dir(curr_dir, name, in_sector);
+  if (new_dir == NULL) {
+    return false;
+  }
+
+  // adding . directory to new directory
+  char dir1[] = ".";
+  added = dir_add(curr_dir, dir1, in_sector);
+  if (added == false) {
+    free_map_release(in_sector, 1);
+    return false;
+  }
+
+  // adding .. directory to new directory
+  char dir2[] = "..";
+  added = dir_add(curr_dir, dir2, curr_dir->inode->sector);
+  if (added == false) {
+    free_map_release(in_sector, 1);
+    return false;
+  }
+
+  return true;
+}
+
+/* change directory, returns true if succesful, false if fail */
+bool chdir(const char* dir) {
+  int found;
+  struct dir* new_dir;
+  struct inode* in;
+  char* name;
+
+  found = file_dir_inode(&dir, &new_dir, &in, &name);
+
+  if (found == 0 || found == -1) {
+    return false;
+  }
+
+  struct thread* cur = thread_current();
+  cur->pcb->cwd = new_dir;
+  return true;
+}
+
+/* readdir system call */
+bool readdir(int fd, char* name) {
+  //
 }
