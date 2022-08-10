@@ -26,6 +26,7 @@ off_t inode_length(const struct inode*);
 /* Buffer cache definitions/structs. */
 
 #define MAX_BUFFERS_CACHED 64
+// #define NO_BUFFER
 
 
 struct buffer_cache {
@@ -33,19 +34,24 @@ struct buffer_cache {
   struct condition fetching;
   struct hash map;
   struct list lru;
+  size_t misses;
 
   bool is_fetching;
   block_sector_t fetching_id;
+  bool is_writing;
+  block_sector_t writing_id;
 };
 
 
 struct buffer_block {
   block_sector_t id;
-  struct rw_lock rw_lock;
-  uint8_t data[BLOCK_SECTOR_SIZE];
-
-  struct lock ref_count_lock;
+  struct lock lock;
+  struct lock rc_lock;
   size_t ref_count;
+
+  struct condition release;
+
+  uint8_t data[BLOCK_SECTOR_SIZE];
   bool dirty;
 
   struct hash_elem helem;
@@ -53,6 +59,12 @@ struct buffer_block {
 };
 
 void buffer_cache_init(void);
-struct buffer_block* buffer_cache_get(block_sector_t id, bool reader);
+void buffer_cache_flush(void);
+struct buffer_block* buffer_cache_get(block_sector_t id);
+void buffer_block_read(struct buffer_block*, uint8_t*, void*, size_t);
+void buffer_block_write(struct buffer_block*, uint8_t*, const void*, size_t);
+void buffer_block_release(struct buffer_block*);
+
+
 
 #endif /* filesys/inode.h */
