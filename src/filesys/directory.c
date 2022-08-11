@@ -72,21 +72,38 @@ struct inode* dir_get_inode(struct dir* dir) {
    otherwise, returns false and ignores EP and OFSP. */
 static bool lookup(const struct dir* dir, const char* name, struct dir_entry* ep, off_t* ofsp) {
   struct dir_entry e;
-  size_t ofs;
+  size_t ofs = 0;
 
   ASSERT(dir != NULL);
   ASSERT(name != NULL);
 
-  for (ofs = 0; inode_read_at(dir->inode, &e, sizeof e, ofs) == sizeof e; ofs += sizeof e)
-    if (e.in_use && !strcmp(name, e.name)) {
-      if (ep != NULL)
+  while(inode_read_at(dir->inode, &e, sizeof e, ofs) == sizeof e) {
+    if(e.in_use && !strcmp(name, e.name)) {
+      if(ep != NULL)
         *ep = e;
-      if (ofsp != NULL)
+      if(ofsp != NULL)
         *ofsp = ofs;
       return true;
     }
+    ofs += sizeof e;
+  }
   return false;
 }
+/*
+  for (ofs = 0; inode_read_at(dir->inode, &e, sizeof e, ofs) == sizeof(struct dir_entry); ofs += sizeof(struct dir_entry)) {
+    if (e.in_use && !strcmp(name, e.name)) {
+      if (ep != NULL) {
+        *ep = e;
+      }
+      if (ofsp != NULL) {
+        *ofsp = ofs;
+      }
+      return true;
+    }
+  }
+  return false;
+}
+*/
 
 /* Searches DIR for a file with the given NAME
    and returns true if one exists, false otherwise.

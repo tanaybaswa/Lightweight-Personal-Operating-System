@@ -64,7 +64,7 @@ void inode_lock_release(struct inode* inode);
 /* Buffer cache definitions/structs. */
 
 #define MAX_BUFFERS_CACHED 64
-#define NO_BUFFER
+//#define NO_BUFFER
 
 struct buffer_cache {
   struct lock lock;
@@ -82,10 +82,6 @@ struct buffer_cache {
 struct buffer_block {
   block_sector_t id;
   struct lock lock;
-  struct lock rc_lock;
-  size_t ref_count;
-
-  struct condition release;
 
   uint8_t data[BLOCK_SECTOR_SIZE];
   bool dirty;

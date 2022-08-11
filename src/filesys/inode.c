@@ -556,7 +556,7 @@ off_t inode_read_at(struct inode* inode, void* buffer_, off_t size, off_t offset
     if (sector_ofs == 0 && chunk_size == BLOCK_SECTOR_SIZE) {
       /* Read full sector directly into caller's buffer. */
 #ifndef NO_BUFFER
-      buffer_cache_read(sector_idx, buffer, chunk_size, bytes_read, sector_ofs);
+      buffer_cache_read(sector_idx, buffer, chunk_size, sector_ofs, bytes_read);
 #endif
 
 #ifdef NO_BUFFER
@@ -574,7 +574,7 @@ off_t inode_read_at(struct inode* inode, void* buffer_, off_t size, off_t offset
 #endif
       
 #ifndef NO_BUFFER
-      buffer_cache_read(sector_idx, buffer, chunk_size, bytes_read, sector_ofs);
+      buffer_cache_read(sector_idx, buffer, chunk_size, sector_ofs, bytes_read);
 #endif
     }
 
@@ -660,7 +660,7 @@ off_t inode_write_at(struct inode* inode, const void* buffer_, off_t size, off_t
 
 
 #ifndef NO_BUFFER
-      buffer_cache_write(sector_idx, buffer, chunk_size, bytes_written, sector_ofs);
+      buffer_cache_write(sector_idx, buffer, chunk_size, sector_ofs, bytes_written);
 #endif
 
     } else {
@@ -686,7 +686,7 @@ off_t inode_write_at(struct inode* inode, const void* buffer_, off_t size, off_t
 #endif
 
 #ifndef NO_BUFFER
-      buffer_cache_write(sector_idx, buffer, chunk_size, bytes_written, sector_ofs);
+      buffer_cache_write(sector_idx, buffer, chunk_size, sector_ofs, bytes_written);
 #endif
 
     }
@@ -794,6 +794,7 @@ void buffer_cache_write(block_sector_t sector_id, const void* write_buffer_, siz
 }
 
 struct buffer_block* buffer_cache_get(block_sector_t id) {
+  // printf("Getting block %d.\n", id);
 
   /* If requesting a block that is being fetched, wait. */
   while(buffer_cache.fetching_id == id && buffer_cache.is_fetching) {
@@ -829,6 +830,8 @@ static struct hash_elem* buffer_cache_fetch(block_sector_t id) {
   /* Prevents buffer cache from fetching same block or fetching at same time. */
   buffer_cache.is_fetching = true;
   buffer_cache.fetching_id = id;
+
+  // printf("Fetching block %d.\n", id);
 
   /* Initialize the block we are fetching. */
   struct buffer_block* buffer_block = malloc(sizeof(struct buffer_block));
@@ -882,6 +885,7 @@ static void buffer_cache_lru_evict() {
    * until this block has been released. A concession is that this halts getting blocks that
    * already exists in the cache. */
 
+  // printf("Evicting block %d.\n", buffer_block->id);
   lock_acquire(&buffer_block->lock);
   if(buffer_block->dirty) {
     buffer_cache.is_writing = true;

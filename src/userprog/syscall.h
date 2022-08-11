@@ -20,6 +20,9 @@ int sys_close(int handle);
 int sys_practice(int input);
 int sys_compute_e(int n);
 
+/* File system syscalls. */
+int sys_inumber(int fd);
+
 void syscall_init(void);
 void safe_file_close(struct file* file);
 

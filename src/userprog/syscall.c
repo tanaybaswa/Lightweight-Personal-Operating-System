@@ -7,6 +7,7 @@
 #include "devices/shutdown.h"
 #include "filesys/filesys.h"
 #include "filesys/file.h"
+#include "filesys/inode.h"
 #include "threads/interrupt.h"
 #include "threads/malloc.h"
 #include "threads/palloc.h"
@@ -17,6 +18,7 @@
 
 static void syscall_handler(struct intr_frame*);
 static void copy_in(void*, const void*, size_t);
+static struct file_descriptor* lookup_fd(int handle);
 
 /* Serializes file system operations. */
 static struct lock fs_lock;
@@ -53,6 +55,8 @@ static void syscall_handler(struct intr_frame* f) {
       {1, (syscall_function*)sys_close},
       {1, (syscall_function*)sys_practice},
       {1, (syscall_function*)sys_compute_e},
+
+      {1, (syscall_function*)sys_inumber},
   };
 
   const struct syscall* sc;
@@ -146,6 +150,16 @@ static char* copy_in_string(const char* us) {
   ks[PGSIZE - 1] = '\0';
   return ks;
 }
+
+/* inode system call. */
+int sys_inumber(int handle) {
+  struct file_descriptor* fd = lookup_fd(handle);
+  struct file* file = fd->file;
+  struct inode* inode = file_get_inode(file);
+  return inode->sector;
+}
+
+
 
 /* Halt system call. */
 int sys_halt(void) { shutdown_power_off(); }
