@@ -19,6 +19,13 @@ enum {
   SYS_CLOSE,        /* Close a file. */
   SYS_PRACTICE,     /* Returns arg incremented by 1 */
   SYS_COMPUTE_E,    /* Computes e */
+
+  SYS_CHDIR,
+  SYS_MKDIR,
+  SYS_READDIR,
+  SYS_ISDIR,
+  SYS_INUMBER,
+
   SYS_PT_CREATE,    /* Creates a new thread */
   SYS_PT_EXIT,      /* Exits the current thread */
   SYS_PT_JOIN,      /* Waits for thread to finish */
@@ -33,13 +40,6 @@ enum {
   /* Project 3 and optionally project 4. */
   SYS_MMAP,   /* Map a file into memory. */
   SYS_MUNMAP, /* Remove a memory mapping. */
-
-  /* Project 4 only. */
-  SYS_CHDIR,   /* Change the current directory. */
-  SYS_MKDIR,   /* Create a directory. */
-  SYS_READDIR, /* Reads a directory entry. */
-  SYS_ISDIR,   /* Tests if a fd represents a directory. */
-  SYS_INUMBER  /* Returns the inode number for a fd. */
 };
 
 #endif /* lib/syscall-nr.h */

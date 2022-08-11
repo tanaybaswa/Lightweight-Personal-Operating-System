@@ -33,6 +33,7 @@ struct process {
   char process_name[16];           /* Name of the main thread */
   struct file* bin_file;           /* Executable. */
   struct thread* main_thread;      /* Pointer to main thread */
+  struct dir* cwd;                 /* Pointer to the current working directory. */
 
   /* Owned by syscall.c. */
   struct list fds; /* List of file descriptors. */
@@ -56,7 +57,9 @@ struct wait_status {
 /* A file descriptor, for binding a file handle to a file. */
 struct file_descriptor {
   struct list_elem elem; /* List element. */
+  bool is_directory;     /* true=directory, false=file. */
   struct file* file;     /* File. */
+  struct dir* dir;       /* Directory, */
   int handle;            /* File handle. */
 };
 

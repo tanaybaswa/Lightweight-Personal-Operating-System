@@ -22,6 +22,8 @@ int sys_compute_e(int n);
 
 /* File system syscalls. */
 int sys_inumber(int fd);
+bool sys_chdir(const char* dir);
+bool sys_mkdir(const char* dir);
 
 void syscall_init(void);
 void safe_file_close(struct file* file);

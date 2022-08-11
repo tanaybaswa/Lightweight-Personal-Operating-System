@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include "devices/block.h"
+#include "threads/malloc.h"
+#include "filesys/off_t.h"
 
 /* Maximum length of a file name component.
    This is the traditional UNIX maximum length.
@@ -12,6 +14,18 @@
 #define NAME_MAX 14
 
 struct inode;
+
+struct dir {
+  struct inode* inode;
+  off_t pos;
+};
+
+struct dir_entry {
+  block_sector_t inode_sector;
+  char name[NAME_MAX + 1];
+  bool in_use;
+  bool is_directory;
+};
 
 /* Opening and closing directories. */
 bool dir_create(block_sector_t sector, size_t entry_cnt);
@@ -26,5 +40,8 @@ bool dir_lookup(const struct dir*, const char* name, struct inode**);
 bool dir_add(struct dir*, const char* name, block_sector_t);
 bool dir_remove(struct dir*, const char* name);
 bool dir_readdir(struct dir*, char name[NAME_MAX + 1]);
+
+/* Splitting file path into parts. */
+int get_next_part(char part[NAME_MAX + 1], const char** srcp);
 
 #endif /* filesys/directory.h */

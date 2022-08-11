@@ -8,6 +8,7 @@
 #include "filesys/filesys.h"
 #include "filesys/file.h"
 #include "filesys/inode.h"
+#include "filesys/directory.h"
 #include "threads/interrupt.h"
 #include "threads/malloc.h"
 #include "threads/palloc.h"
@@ -56,6 +57,10 @@ static void syscall_handler(struct intr_frame* f) {
       {1, (syscall_function*)sys_practice},
       {1, (syscall_function*)sys_compute_e},
 
+      {1, (syscall_function*)sys_chdir},
+      {1, (syscall_function*)sys_mkdir},
+      {1, NULL},
+      {1, NULL},
       {1, (syscall_function*)sys_inumber},
   };
 
@@ -159,7 +164,134 @@ int sys_inumber(int handle) {
   return inode->sector;
 }
 
+bool sys_chdir(const char* udir) {
+  char* kdir = copy_in_string(udir);
+  char* kdir_copy = kdir;
+  bool ok = false;
 
+  /* Two situations:
+   * 1. KDIR is an absolute path AKA the path begins with '/'. 
+   * We search starting from the root directory.
+   * 2. KDIR is a relative path AKA the path does not begin with '/'.
+   * We search starting from the cwd directory of the process.
+   */
+
+  size_t len = strlen(kdir);
+  if(len == 0) {
+    palloc_free_page(kdir);
+    return ok;
+  }
+
+  lock_acquire(&fs_lock);
+  struct dir* cwd;
+  if(kdir[0] == '/') {
+    cwd = dir_open_root();
+  } else {
+    // TODO: Investigate if we need to use dir_reopen() here.
+    cwd = dir_reopen(thread_current()->pcb->cwd);
+  }
+
+  char path_part[NAME_MAX + 1];
+  int result;
+  bool not_found = false;
+  while((result = get_next_part(path_part, &kdir)) == 1) {
+    /* Search the cwd for the dir_entry with PATH_PART name. */
+    /* NOTE: If user put a file in a non-terminating position,
+     * this has unknown behavior. */
+    struct inode* dir_inode;
+    bool found = dir_lookup(cwd, path_part, &dir_inode);
+    if(found) {
+      dir_close(cwd);
+      cwd = dir_open(dir_inode);
+    } else {
+      not_found = true;
+      break;
+    }
+  }
+
+  ok = !not_found && result != -1;
+  if(ok) {
+    /* Change directory. */
+    dir_close(thread_current()->pcb->cwd);
+    thread_current()->pcb->cwd = cwd;
+  } else {
+    dir_close(cwd);
+  }
+  
+  lock_release(&fs_lock);
+  palloc_free_page(kdir_copy);
+  return ok;
+}
+
+static bool is_last(const char* path) {
+  while(*path == '/') {
+    path++;
+  }
+
+  while(*path != '\0' && *path != '/') {
+    path++;
+  }
+
+  if(*path == '\0')
+    return true;
+
+  /* We've encounter a '/', make sure there is more text after. */
+  while(*path == '/' && *path != '\0')
+    path++;
+
+  if(*path == '\0')
+    return true;
+
+  return false;
+}
+
+bool sys_mkdir(const char* udir) {
+  char* kdir = copy_in_string(udir);
+  char* kdir_copy = kdir;
+  bool ok = false;
+
+  int len = strlen(kdir);
+  if(len == 0) {
+    palloc_free_page(kdir);
+    return ok;
+  }
+
+  lock_acquire(&fs_lock);
+  struct dir* cwd;
+
+  if(kdir[0] == '/') {
+    cwd = dir_open_root();
+  } else {
+    cwd = dir_reopen(thread_current()->pcb->cwd);
+  }
+
+  int result;
+  char path_part[NAME_MAX + 1];
+  // "a/b/c"
+  while((result = get_next_part(path_part, &kdir)) == 1) {
+    struct inode* dir_inode;
+    bool found = dir_lookup(cwd, path_part, &dir_inode);
+    if(is_last(kdir)) {
+      /* Make sure PATH_PART doesn't exist. */
+      if(!found)
+        ok = filesys_create_dir(path_part, cwd, sizeof(struct dir_entry) * 16);
+      break;
+    } else {
+      /* Make sure PATH_PART does exist. */
+      if(found) {
+        dir_close(cwd);
+        cwd = dir_open(dir_inode);
+      } else {
+        break;
+      }
+    }
+  }
+
+  dir_close(cwd);
+  lock_release(&fs_lock);
+  palloc_free_page(kdir_copy);
+  return ok;
+}
 
 /* Halt system call. */
 int sys_halt(void) { shutdown_power_off(); }
@@ -194,7 +326,7 @@ int sys_create(const char* ufile, unsigned initial_size) {
   bool ok;
 
   lock_acquire(&fs_lock);
-  ok = filesys_create(kfile, initial_size);
+  ok = filesys_create(kfile, thread_current()->pcb->cwd, initial_size);
   lock_release(&fs_lock);
 
   palloc_free_page(kfile);

@@ -33,6 +33,7 @@ struct exec_info {
   struct semaphore load_done;      /* "Up"ed when loading complete. */
   struct wait_status* wait_status; /* Child process. */
   bool success;                    /* Program successfully loaded? */
+  struct dir* parent_dir;          /* Child's parent directory. */
 };
 
 /* Initializes user programs in the system by ensuring the main
@@ -52,8 +53,12 @@ void userprog_init(void) {
   success = t->pcb != NULL;
 
   /* Main only needs a list of children */
-  if (success)
+  if (success) {
     list_init(&t->pcb->children);
+
+    /* Set initial PCB's cwd to root and add '.' reference to self. */
+    t->pcb->cwd = NULL;
+  }
 
   /* Kill the kernel if we did not succeed */
   ASSERT(success);
@@ -71,6 +76,7 @@ pid_t process_execute(const char* file_name) {
 
   /* Initialize exec_info. */
   exec.file_name = file_name;
+  exec.parent_dir = thread_current()->pcb->cwd;
   sema_init(&exec.load_done, 0);
 
   /* Create a new thread to execute FILE_NAME. */
@@ -114,6 +120,14 @@ static void start_process(void* exec_) {
     list_init(&t->pcb->fds);
     t->pcb->next_handle = 2;
     t->pcb->main_thread = t;
+
+    if(exec->parent_dir == NULL) {
+      t->pcb->cwd = dir_open_root();
+      dir_add(t->pcb->cwd, ".", ROOT_DIR_SECTOR);
+      dir_add(t->pcb->cwd, "..", ROOT_DIR_SECTOR);
+    } else {
+      t->pcb->cwd = dir_reopen(exec->parent_dir);
+    }
     strlcpy(t->pcb->process_name, t->name, sizeof t->name);
   }
 

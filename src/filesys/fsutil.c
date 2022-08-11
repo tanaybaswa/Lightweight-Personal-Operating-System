@@ -8,8 +8,10 @@
 #include "filesys/file.h"
 #include "filesys/filesys.h"
 #include "threads/malloc.h"
+#include "threads/thread.h"
 #include "threads/palloc.h"
 #include "threads/vaddr.h"
+#include "userprog/process.h"
  
 /* List files in the root directory. */
 void fsutil_ls(char** argv UNUSED) {
@@ -105,7 +107,8 @@ void fsutil_extract(char** argv UNUSED) {
       printf("Putting '%s' into the file system...\n", file_name);
 
       /* Create destination file. */
-      if (!filesys_create(file_name, size))
+      struct dir* cwd = thread_current()->pcb->cwd;
+      if (!filesys_create(file_name, cwd, size))
         PANIC("%s: create failed", file_name);
       dst = filesys_open(file_name);
       if (dst == NULL)

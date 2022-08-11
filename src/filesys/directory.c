@@ -6,19 +6,6 @@
 #include "filesys/inode.h"
 #include "threads/malloc.h"
 
-/* A directory. */
-struct dir {
-  struct inode* inode; /* Backing store. */
-  off_t pos;           /* Current position. */
-};
-
-/* A single directory entry. */
-struct dir_entry {
-  block_sector_t inode_sector; /* Sector number of header. */
-  char name[NAME_MAX + 1];     /* Null terminated file name. */
-  bool in_use;                 /* In use or free? */
-};
-
 /* Creates a directory with space for ENTRY_CNT entries in the
    given SECTOR.  Returns true if successful, false on failure. */
 bool dir_create(block_sector_t sector, size_t entry_cnt) {
@@ -89,21 +76,6 @@ static bool lookup(const struct dir* dir, const char* name, struct dir_entry* ep
   }
   return false;
 }
-/*
-  for (ofs = 0; inode_read_at(dir->inode, &e, sizeof e, ofs) == sizeof(struct dir_entry); ofs += sizeof(struct dir_entry)) {
-    if (e.in_use && !strcmp(name, e.name)) {
-      if (ep != NULL) {
-        *ep = e;
-      }
-      if (ofsp != NULL) {
-        *ofsp = ofs;
-      }
-      return true;
-    }
-  }
-  return false;
-}
-*/
 
 /* Searches DIR for a file with the given NAME
    and returns true if one exists, false otherwise.
@@ -215,4 +187,29 @@ bool dir_readdir(struct dir* dir, char name[NAME_MAX + 1]) {
     }
   }
   return false;
+}
+
+int get_next_part(char part[NAME_MAX + 1], const char** srcp) {
+  const char* src = *srcp;
+  char* dst = part;
+
+  /* Skip leading slashes. If it's all slashes, we're done. */
+  while(*src == '/')
+    src++;
+  if(*src == '\0')
+    return 0;
+
+  /* Copy up to NAME_MAX character from SRC to DST. Add null terminator. */
+  while(*src != '/' && *src != '\0') {
+    if(dst < part + NAME_MAX)
+      *dst++ = *src;
+    else
+      return -1;
+    src++;
+  }
+  *dst = '\0';
+
+  /* Advance source pointer. */
+  *srcp = src;
+  return 1;
 }
