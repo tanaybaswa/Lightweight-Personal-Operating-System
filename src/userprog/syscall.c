@@ -14,8 +14,6 @@
 #include "threads/vaddr.h"
 #include "userprog/process.h"
 #include "userprog/pagedir.h"
-#include "filesys/directory.h"
-#include "filesys/inode.h"
 
 static void syscall_handler(struct intr_frame*);
 static void copy_in(void*, const void*, size_t);
@@ -40,16 +38,21 @@ static void syscall_handler(struct intr_frame* f) {
 
   /* Table of system calls. */
   static const struct syscall syscall_table[] = {
-      {0, (syscall_function*)sys_halt},      {1, (syscall_function*)sys_exit},
-      {1, (syscall_function*)sys_exec},      {1, (syscall_function*)sys_wait},
-      {2, (syscall_function*)sys_create},    {1, (syscall_function*)sys_remove},
-      {1, (syscall_function*)sys_open},      {1, (syscall_function*)sys_filesize},
-      {3, (syscall_function*)sys_read},      {3, (syscall_function*)sys_write},
-      {2, (syscall_function*)sys_seek},      {1, (syscall_function*)sys_tell},
-      {1, (syscall_function*)sys_close},     {1, (syscall_function*)sys_practice},
-      {1, (syscall_function*)sys_compute_e}, {1, (syscall_function*)sys_chdir},
-      {1, (syscall_function*)sys_mkdir},     {2, (syscall_function*)sys_readdir},
-      {1, (syscall_function*)sys_isdir},     {1, (syscall_function*)sys_inumber},
+      {0, (syscall_function*)sys_halt},
+      {1, (syscall_function*)sys_exit},
+      {1, (syscall_function*)sys_exec},
+      {1, (syscall_function*)sys_wait},
+      {2, (syscall_function*)sys_create},
+      {1, (syscall_function*)sys_remove},
+      {1, (syscall_function*)sys_open},
+      {1, (syscall_function*)sys_filesize},
+      {3, (syscall_function*)sys_read},
+      {3, (syscall_function*)sys_write},
+      {2, (syscall_function*)sys_seek},
+      {1, (syscall_function*)sys_tell},
+      {1, (syscall_function*)sys_close},
+      {1, (syscall_function*)sys_practice},
+      {1, (syscall_function*)sys_compute_e},
   };
 
   const struct syscall* sc;
@@ -143,24 +146,6 @@ static char* copy_in_string(const char* us) {
   ks[PGSIZE - 1] = '\0';
   return ks;
 }
-
-// /* Return the proper directory corresponding to the relative path or absolute path passed in */
-// static struct dir* path_resolution(char* path) {
-//   char* kfile = copy_in_string(path);
-//   char* curr;
-//   struct dir* directory;
-
-//   struct thread* curr_thread = thread_current();
-
-//   while (curr = get_next_part(curr, &kfile) == 1) {
-//     if (curr == "/") {
-//       return dir_open_root();
-//     }
-//     directory = dir_reopen()
-//   }
-//   palloc_free_page(kfile);
-//   return NULL;
-// }
 
 /* Halt system call. */
 int sys_halt(void) { shutdown_power_off(); }
@@ -276,11 +261,6 @@ int sys_read(int handle, void* udst_, unsigned size) {
   struct file_descriptor* fd;
   int bytes_read = 0;
 
-  //check if file is a directory and don't allow read if it is
-  fd = lookup_fd(handle);
-  if (fd->is_dir)
-    return 1;
-
   /* Handle keyboard reads. */
   if (handle == STDIN_FILENO) {
     for (bytes_read = 0; (size_t)bytes_read < size; bytes_read++)
@@ -290,6 +270,7 @@ int sys_read(int handle, void* udst_, unsigned size) {
   }
 
   /* Handle all other reads. */
+  fd = lookup_fd(handle);
   lock_acquire(&fs_lock);
   while (size > 0) {
     /* How much to read into this page? */
@@ -330,13 +311,6 @@ int sys_write(int handle, void* usrc_, unsigned size) {
   uint8_t* usrc = usrc_;
   struct file_descriptor* fd = NULL;
   int bytes_written = 0;
-
-  //check if file is a directory and don't allow read if it is
-  /* This is broken. lookup_fd terminates the process. 
-  fd = lookup_fd(handle);
-  if (fd->is_dir)
-    return 1;
-  */
 
   /* Lookup up file descriptor. */
   if (handle != STDOUT_FILENO)
@@ -408,47 +382,10 @@ int sys_tell(int handle) {
 /* Close system call. */
 int sys_close(int handle) {
   struct file_descriptor* fd = lookup_fd(handle);
-  if (fd->is_dir) {
-    dir_close(fd->dir);
-  } else {
-    safe_file_close(fd->file);
-  }
+  safe_file_close(fd->file);
   list_remove(&fd->elem);
   free(fd);
   return 0;
-}
-
-/* chdir system call */
-int sys_chdir(const char* dir) {}
-
-/* mkdir system call, return 0 for success, -1 for failure */
-int sys_mkdir(const char* dir) {
-  char* kfile = copy_in_string(dir);
-  int made = mkdir(kfile);
-  if (made == -1) {
-    palloc_free_page(kfile);
-    return -1;
-  }
-  return 0;
-}
-
-/* readdir system call */
-int sys_readdir(int fd, char* name) {
-  //
-}
-
-/* isdir system call */
-int sys_isdir(int fd) {
-  struct file_descriptor* file;
-  file = lookup_fd(fd);
-  return file->is_dir;
-}
-
-/* inumber system call */
-int sys_inumber(int fd) {
-  struct file_descriptor* f;
-  f = lookup_fd(fd);
-  return inode_get_inumber(file_get_inode(f->file));
 }
 
 /* Practice system call. */
