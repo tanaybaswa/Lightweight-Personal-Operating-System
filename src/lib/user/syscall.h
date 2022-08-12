@@ -26,6 +26,7 @@ typedef int mapid_t;
 
 /* Projects 2 and later. */
 void halt(void) NO_RETURN;
+void flush_cache(void);
 void exit(int status) NO_RETURN;
 pid_t exec(const char* file);
 int wait(pid_t);
@@ -40,6 +41,7 @@ unsigned tell(int fd);
 void close(int fd);
 int practice(int i);
 double compute_e(int n);
+double hit_rate(void);
 tid_t sys_pthread_create(stub_fun sfun, pthread_fun tfun, const void* arg);
 void sys_pthread_exit(void) NO_RETURN;
 tid_t sys_pthread_join(tid_t tid);

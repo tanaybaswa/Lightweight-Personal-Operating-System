@@ -69,6 +69,7 @@ struct buffer_cache {
   struct hash map;
   struct list lru;
   size_t misses;
+  size_t total;
 
   bool is_fetching;
   block_sector_t fetching_id;
@@ -92,6 +93,7 @@ void buffer_cache_flush(void);
 struct buffer_block* buffer_cache_get(block_sector_t id);
 void buffer_cache_read(block_sector_t, void*, size_t, size_t, size_t);
 void buffer_cache_write(block_sector_t, const void*, size_t, size_t, size_t);
+double buffer_cache_hit_rate(void);
 
 
 

@@ -17,6 +17,7 @@
 #include "userprog/process.h"
 #include "userprog/pagedir.h"
 
+
 static void syscall_handler(struct intr_frame*);
 static void copy_in(void*, const void*, size_t);
 static struct file_descriptor* lookup_fd(int handle);
@@ -62,6 +63,8 @@ static void syscall_handler(struct intr_frame* f) {
       {2, (syscall_function*)sys_readdir},
       {1, (syscall_function*)sys_isdir},
       {1, (syscall_function*)sys_inumber},
+      {0, (syscall_function*)sys_hit_rate},
+      {0, (syscall_function*)sys_flush_cache},
   };
 
   const struct syscall* sc;
@@ -154,6 +157,14 @@ static char* copy_in_string(const char* us) {
   }
   ks[PGSIZE - 1] = '\0';
   return ks;
+}
+
+double sys_hit_rate() {
+  return buffer_cache_hit_rate();
+}
+
+void sys_flush_cache() {
+  buffer_cache_flush();
 }
 
 /* inode system call. */

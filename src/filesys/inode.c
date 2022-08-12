@@ -767,6 +767,7 @@ void buffer_cache_init() {
   buffer_cache.fetching_id = 0;
   buffer_cache.is_fetching = false;
   buffer_cache.misses = 0;
+  buffer_cache.total = 0;
   buffer_cache.is_writing = false;
   buffer_cache.writing_id = 0;
 }
@@ -786,6 +787,7 @@ static bool buffer_cache_less_func(const struct hash_elem* a, const struct hash_
 void buffer_cache_read(block_sector_t sector_id, void* read_buffer_, size_t size, size_t block_buffer_offset, size_t read_buffer_offset) {
   lock_acquire(&buffer_cache.lock);
   struct buffer_block* bb = buffer_cache_get(sector_id);
+  //buffer_cache_get(sector_id + 1);
   lock_release(&buffer_cache.lock);
 
   lock_acquire(&bb->lock);
@@ -798,6 +800,7 @@ void buffer_cache_read(block_sector_t sector_id, void* read_buffer_, size_t size
 void buffer_cache_write(block_sector_t sector_id, const void* write_buffer_, size_t size, size_t block_buffer_offset, size_t write_buffer_offset) {
   lock_acquire(&buffer_cache.lock);
   struct buffer_block* bb = buffer_cache_get(sector_id);
+  //buffer_cache_get(sector_id + 1);
   lock_release(&buffer_cache.lock);
 
   lock_acquire(&bb->lock);
@@ -809,7 +812,7 @@ void buffer_cache_write(block_sector_t sector_id, const void* write_buffer_, siz
 }
 
 struct buffer_block* buffer_cache_get(block_sector_t id) {
-  // printf("Getting block %d.\n", id);
+  buffer_cache.total += 1;
 
   /* If requesting a block that is being fetched, wait. */
   while(buffer_cache.fetching_id == id && buffer_cache.is_fetching) {
@@ -824,6 +827,7 @@ struct buffer_block* buffer_cache_get(block_sector_t id) {
   struct hash_elem* buffer_block_helem = hash_find(&buffer_cache.map, &search_key.helem);
   if(buffer_block_helem == NULL) {
     /* Bring the block into the buffer cache. */
+    buffer_cache.misses += 1;
     buffer_block_helem = buffer_cache_fetch(id);
   } else {
     /* Update the buffer cache's LRU. */
@@ -858,7 +862,6 @@ static struct hash_elem* buffer_cache_fetch(block_sector_t id) {
   lock_release(&buffer_cache.lock);
   block_read(fs_device, id, buffer_block->data);
   lock_acquire(&buffer_cache.lock);
-  buffer_cache.misses += 1;
 
   buffer_cache.is_fetching = false;
   buffer_cache.fetching_id = 0;
@@ -936,4 +939,22 @@ void buffer_cache_flush() {
     free(block);
   }
 
+  buffer_cache.total = 0;
+  buffer_cache.misses = 0;
+  lock_release(&buffer_cache.lock);
+
+}
+
+double buffer_cache_hit_rate() {
+  lock_acquire(&buffer_cache.lock);
+  size_t hits = buffer_cache.total - buffer_cache.misses;
+  size_t total = buffer_cache.total;
+  lock_release(&buffer_cache.lock);
+  double rate;
+  if(total > 0)
+    rate = ((double)hits) / ((double)total);
+  else
+    rate = 0.0;
+
+  return rate;
 }

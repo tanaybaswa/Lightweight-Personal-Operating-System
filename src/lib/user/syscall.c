@@ -14,6 +14,19 @@
     retval;                                                                                        \
   })
 
+/* INOVK. */
+
+#define syscall0f(NUMBER)                                                                          \
+  ({                                                                                               \
+    float retval;                                                                                  \
+    asm volatile("pushl %[number]; int $0x30; addl $4, %%esp"                                      \
+                 : "=a"(retval)                                                                    \
+                 : [number] "i"(NUMBER)                                                            \
+                 : "memory");                                                                      \
+    retval;                                                                                        \
+   })
+
+
 /* Invokes syscall NUMBER, passing argument ARG0, and returns the
    return value as an `int'. */
 #define syscall1(NUMBER, ARG0)                                                                     \
@@ -80,6 +93,8 @@ pid_t exec(const char* file) { return (pid_t)syscall1(SYS_EXEC, file); }
 
 int wait(pid_t pid) { return syscall1(SYS_WAIT, pid); }
 
+void flush_cache(void) { return syscall0(SYS_FLUSH_CACHE); }
+
 bool create(const char* file, unsigned initial_size) {
   return syscall2(SYS_CREATE, file, initial_size);
 }
@@ -117,6 +132,8 @@ bool isdir(int fd) { return syscall1(SYS_ISDIR, fd); }
 int inumber(int fd) { return syscall1(SYS_INUMBER, fd); }
 
 double compute_e(int n) { return (double)syscall1f(SYS_COMPUTE_E, n); }
+
+double hit_rate(void) { return (double)syscall0f(SYS_HIT_RATE); }
 
 tid_t sys_pthread_create(stub_fun sfun, pthread_fun tfun, const void* arg) {
   return syscall3(SYS_PT_CREATE, sfun, tfun, arg);

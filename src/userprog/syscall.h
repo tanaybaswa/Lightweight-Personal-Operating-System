@@ -28,6 +28,8 @@ bool sys_chdir(const char* dir);
 bool sys_mkdir(const char* dir);
 bool sys_readdir(int handle, char* ufile);
 bool sys_isdir(int handle);
+double sys_hit_rate(void);
+void sys_flush_cache(void);
 
 void syscall_init(void);
 void safe_file_close(struct file* file);
