@@ -440,11 +440,28 @@ int sys_open(const char* ufile) {
   if (fd != NULL) {
     lock_acquire(&fs_lock);
 
+
     struct dir* cwd;
-    if(kfile[0] == '/') 
+    if(kfile[0] == '/') {
+      if(len == 1) {
+        fd->is_directory = true;
+        fd->dir = dir_open_root();
+        if(fd->dir == NULL) {
+          free(fd);
+        } else {
+          handle = fd->handle = thread_current()->pcb->next_handle++;
+          list_push_front(&thread_current()->pcb->fds, &fd->elem);
+        }
+
+        palloc_free_page(kfile);
+        lock_release(&fs_lock);
+        return handle;
+
+      }
       cwd = dir_open_root();
-    else
+    } else {
       cwd = dir_reopen(thread_current()->pcb->cwd);
+    }
 
     char path_part[NAME_MAX + 1];
     int result;
