@@ -14,6 +14,7 @@
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "devices/block.h"
 #include "userprog/process.h"
 #include "userprog/pagedir.h"
 
@@ -65,6 +66,8 @@ static void syscall_handler(struct intr_frame* f) {
       {1, (syscall_function*)sys_inumber},
       {0, (syscall_function*)sys_hit_rate},
       {0, (syscall_function*)sys_flush_cache},
+      {0, (syscall_function*)sys_read_count},
+      {0, (syscall_function*)sys_write_count},
   };
 
   const struct syscall* sc;
@@ -165,6 +168,14 @@ double sys_hit_rate() {
 
 void sys_flush_cache() {
   buffer_cache_flush();
+}
+
+int sys_read_count() {
+  return block_get_reads(fs_device);
+}
+
+int sys_write_count() {
+  return block_get_writes(fs_device);
 }
 
 /* inode system call. */

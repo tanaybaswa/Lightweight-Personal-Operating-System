@@ -28,8 +28,12 @@ bool sys_chdir(const char* dir);
 bool sys_mkdir(const char* dir);
 bool sys_readdir(int handle, char* ufile);
 bool sys_isdir(int handle);
+/* Gets the hit rate of the buffer cache/flushes. */
 double sys_hit_rate(void);
 void sys_flush_cache(void);
+/* Gets the read/write count to the fs_device. */
+int sys_read_count(void);
+int sys_write_count(void);
 
 void syscall_init(void);
 void safe_file_close(struct file* file);

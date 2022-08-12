@@ -121,6 +121,10 @@ const char* block_name(struct block* block) { return block->name; }
 /* Returns BLOCK's type. */
 enum block_type block_type(struct block* block) { return block->type; }
 
+int block_get_reads(struct block* block) { return block->read_cnt; }
+
+int block_get_writes(struct block* block) { return block->write_cnt; }
+
 /* Prints statistics for each block device used for a Pintos role. */
 void block_print_stats(void) {
   int i;

@@ -89,11 +89,17 @@ void exit(int status) {
   NOT_REACHED();
 }
 
+int write_count(void) { return (int)syscall0(SYS_WRITE_COUNT); }
+
+int read_count(void) { return (int)syscall0(SYS_READ_COUNT); }
+
 pid_t exec(const char* file) { return (pid_t)syscall1(SYS_EXEC, file); }
 
 int wait(pid_t pid) { return syscall1(SYS_WAIT, pid); }
 
-void flush_cache(void) { return syscall0(SYS_FLUSH_CACHE); }
+void flush_cache(void) {
+  syscall0(SYS_FLUSH_CACHE);
+}
 
 bool create(const char* file, unsigned initial_size) {
   return syscall2(SYS_CREATE, file, initial_size);

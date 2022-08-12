@@ -27,6 +27,8 @@ typedef int mapid_t;
 /* Projects 2 and later. */
 void halt(void) NO_RETURN;
 void flush_cache(void);
+int write_count(void);
+int read_count(void);
 void exit(int status) NO_RETURN;
 pid_t exec(const char* file);
 int wait(pid_t);

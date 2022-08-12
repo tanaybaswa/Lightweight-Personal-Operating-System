@@ -27,6 +27,8 @@ enum {
   SYS_INUMBER,
   SYS_HIT_RATE,
   SYS_FLUSH_CACHE,
+  SYS_READ_COUNT,
+  SYS_WRITE_COUNT,
 
   SYS_PT_CREATE,    /* Creates a new thread */
   SYS_PT_EXIT,      /* Exits the current thread */
