@@ -123,16 +123,11 @@ int main(void) {
   serial_init_queue();
   timer_calibrate();
 
-#ifdef USERPROG
-  /* Give main thread a minimal PCB so it can launch the first process */
-  //userprog_init();
-#endif
-
 #ifdef FILESYS
   /* Initialize file system. */
-  buffer_cache_init();
   ide_init();
   locate_block_devices();
+  buffer_cache_init();
   filesys_init(format_filesys);
 #endif
 

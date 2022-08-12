@@ -787,7 +787,8 @@ static bool buffer_cache_less_func(const struct hash_elem* a, const struct hash_
 void buffer_cache_read(block_sector_t sector_id, void* read_buffer_, size_t size, size_t block_buffer_offset, size_t read_buffer_offset) {
   lock_acquire(&buffer_cache.lock);
   struct buffer_block* bb = buffer_cache_get(sector_id);
-  //buffer_cache_get(sector_id + 1);
+  if(sector_id + 1 < block_size(fs_device))
+    buffer_cache_get(sector_id + 1);
   lock_release(&buffer_cache.lock);
 
   lock_acquire(&bb->lock);
@@ -800,7 +801,8 @@ void buffer_cache_read(block_sector_t sector_id, void* read_buffer_, size_t size
 void buffer_cache_write(block_sector_t sector_id, const void* write_buffer_, size_t size, size_t block_buffer_offset, size_t write_buffer_offset) {
   lock_acquire(&buffer_cache.lock);
   struct buffer_block* bb = buffer_cache_get(sector_id);
-  //buffer_cache_get(sector_id + 1);
+  if(sector_id + 1 < block_size(fs_device))
+    buffer_cache_get(sector_id + 1);
   lock_release(&buffer_cache.lock);
 
   lock_acquire(&bb->lock);
