@@ -193,6 +193,12 @@ bool sys_chdir(const char* udir) {
     cwd = dir_reopen(thread_current()->pcb->cwd);
   }
 
+  if(cwd == NULL) {
+    palloc_free_page(kdir);
+    lock_release(&fs_lock);
+    return ok;
+  }
+
   char path_part[NAME_MAX + 1];
   int result;
   bool not_found = false;
@@ -255,6 +261,12 @@ bool sys_mkdir(const char* udir) {
     cwd = dir_reopen(thread_current()->pcb->cwd);
   }
 
+  if(cwd == NULL) {
+    palloc_free_page(kdir);
+    lock_release(&fs_lock);
+    return ok;
+  }
+
   int result;
   char path_part[NAME_MAX + 1];
   // "a/b/c"
@@ -299,13 +311,82 @@ int sys_exit(int exit_code) {
 int sys_exec(const char* ufile) {
   pid_t tid;
   char* kfile = copy_in_string(ufile);
+  char* kfile_copy = kfile;
+
+  if(strlen(kfile) == 0) {
+    palloc_free_page(kfile);
+    return -1;
+  }
+
+  /* Split the exec string into two parts:
+   * The path and the arguments.
+   */
+  char* exec_path, *args;
+  exec_path = strtok_r(kfile, " ", &args);
 
   lock_acquire(&fs_lock);
-  tid = process_execute(kfile);
+
+  struct dir* cwd;
+  if(exec_path[0] == "/")
+    cwd = dir_open_root();
+  else
+    cwd = dir_reopen(thread_current()->pcb->cwd);
+
+  if(cwd == NULL) {
+    palloc_free_page(kfile_copy);
+    lock_release(&fs_lock);
+    return -1;
+  }
+
+  char path_part[NAME_MAX + 1];
+  int result;
+  bool valid = false;
+
+  while((result = get_next_part(path_part, &exec_path)) == 1) {
+    struct inode* inode;
+    bool is_dir;
+    bool found = dir_lookup(cwd, path_part, &inode, &is_dir);
+    bool last = is_last(exec_path);
+
+    if(last) {
+
+      /* Make sure exe exists. */
+      if(!found || is_dir)
+        break;
+
+      valid = true;
+      inode_close(inode);
+    } else {
+      if(!found || !is_dir)
+        break;
+
+      dir_close(cwd);
+      dir_open(inode);
+    }
+  }
+
+  dir_close(cwd);
+
+  if(valid) {
+    int args_len = strlen(args);
+    int exec_len = strlen(path_part);
+    if(args_len > 0) {
+      char args_formatted[args_len + exec_len + 2];
+      memcpy(args_formatted, path_part, exec_len);
+      args_formatted[exec_len] = ' ';
+      memcpy(args_formatted + exec_len + 1, args, args_len);
+      args_formatted[exec_len + args_len + 1] = '\0';
+
+      tid = process_execute(args_formatted);
+    } else {
+      tid = process_execute(path_part);
+    }
+  } else {
+    tid = -1;
+  }
+
   lock_release(&fs_lock);
-
-  palloc_free_page(kfile);
-
+  palloc_free_page(kfile_copy);
   return tid;
 }
 

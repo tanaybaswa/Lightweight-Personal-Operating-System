@@ -72,7 +72,7 @@ void userprog_init(void) {
    process id, or TID_ERROR if the thread cannot be created. */
 pid_t process_execute(const char* file_name) {
   struct exec_info exec;
-  char thread_name[16];
+  char thread_name[NAME_MAX + 2];
   char* save_ptr;
   tid_t tid;
 
