@@ -57,7 +57,9 @@ void userprog_init(void) {
     list_init(&t->pcb->children);
 
     /* Set initial PCB's cwd to root and add '.' reference to self. */
-    t->pcb->cwd = NULL;
+    t->pcb->cwd = dir_open_root();
+    dir_add(t->pcb->cwd, ".", ROOT_DIR_SECTOR, true);
+    dir_add(t->pcb->cwd, "..", ROOT_DIR_SECTOR, true);
   }
 
   /* Kill the kernel if we did not succeed */
@@ -121,13 +123,7 @@ static void start_process(void* exec_) {
     t->pcb->next_handle = 2;
     t->pcb->main_thread = t;
 
-    if(exec->parent_dir == NULL) {
-      t->pcb->cwd = dir_open_root();
-      dir_add(t->pcb->cwd, ".", ROOT_DIR_SECTOR);
-      dir_add(t->pcb->cwd, "..", ROOT_DIR_SECTOR);
-    } else {
-      t->pcb->cwd = dir_reopen(exec->parent_dir);
-    }
+    t->pcb->cwd = dir_reopen(exec->parent_dir);
     strlcpy(t->pcb->process_name, t->name, sizeof t->name);
   }
 
@@ -251,6 +247,8 @@ void process_exit(void) {
     struct file_descriptor* fd = list_entry(e, struct file_descriptor, elem);
     sys_close(fd->handle);
   }
+
+  dir_close(cur->pcb->cwd);
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
@@ -397,7 +395,7 @@ bool load(const char* cmd_line, void (**eip)(void), void** esp) {
     *cp = '\0';
 
   /* Open executable file. */
-  t->pcb->bin_file = file = filesys_open(file_name);
+  t->pcb->bin_file = file = filesys_open_file(file_name, t->pcb->cwd);
   if (file == NULL) {
     printf("load: %s: open failed\n", file_name);
     goto done;

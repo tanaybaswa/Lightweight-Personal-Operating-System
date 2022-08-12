@@ -125,7 +125,7 @@ int main(void) {
 
 #ifdef USERPROG
   /* Give main thread a minimal PCB so it can launch the first process */
-  userprog_init();
+  //userprog_init();
 #endif
 
 #ifdef FILESYS
@@ -137,7 +137,7 @@ int main(void) {
 #endif
 
 #ifdef USERPROG
-  //userprog_init();
+  userprog_init();
 #endif
 
   printf("Boot complete.\n");

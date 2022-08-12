@@ -107,8 +107,7 @@ void fsutil_extract(char** argv UNUSED) {
       printf("Putting '%s' into the file system...\n", file_name);
 
       /* Create destination file. */
-      struct dir* cwd = thread_current()->pcb->cwd;
-      if (!filesys_create(file_name, cwd, size))
+      if (!filesys_create(file_name, size))
         PANIC("%s: create failed", file_name);
       dst = filesys_open(file_name);
       if (dst == NULL)
