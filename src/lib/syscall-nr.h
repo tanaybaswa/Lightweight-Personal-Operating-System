@@ -39,7 +39,7 @@ enum {
   SYS_SEMA_INIT,    /* Initializes a semaphore */
   SYS_SEMA_DOWN,    /* Downs a semaphore */
   SYS_SEMA_UP,      /* Ups a semaphore */
-  SYS_GET_TID,      /* Gets TID of the current thread */
+  //SYS_GET_TID,      /* Gets TID of the current thread */
 
   /* Project 3 and optionally project 4. */
   SYS_MMAP,   /* Map a file into memory. */

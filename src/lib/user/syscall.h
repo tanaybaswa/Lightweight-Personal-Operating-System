@@ -27,8 +27,6 @@ typedef int mapid_t;
 /* Projects 2 and later. */
 void halt(void) NO_RETURN;
 void flush_cache(void);
-int write_count(void);
-int read_count(void);
 void exit(int status) NO_RETURN;
 pid_t exec(const char* file);
 int wait(pid_t);
@@ -44,6 +42,8 @@ void close(int fd);
 int practice(int i);
 double compute_e(int n);
 double hit_rate(void);
+int read_count(void);
+int write_count(void);
 tid_t sys_pthread_create(stub_fun sfun, pthread_fun tfun, const void* arg);
 void sys_pthread_exit(void) NO_RETURN;
 tid_t sys_pthread_join(tid_t tid);
@@ -53,7 +53,7 @@ void lock_release(lock_t* lock);
 bool sema_init(sema_t* sema, int val);
 void sema_down(sema_t* sema);
 void sema_up(sema_t* sema);
-tid_t get_tid(void);
+//tid_t get_tid(void);
 
 /* Project 3 and optionally project 4. */
 mapid_t mmap(int fd, void* addr);
