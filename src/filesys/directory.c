@@ -97,6 +97,20 @@ bool dir_lookup(const struct dir* dir, const char* name, struct inode** inode, b
   return *inode != NULL;
 }
 
+/* Clears all of a directory's entrys. */
+void dir_clear(struct dir* dir) {
+  struct dir_entry e;
+  off_t ofs = 0;
+
+  ASSERT(dir != NULL);
+
+  while(inode_read_at(dir->inode, &e, sizeof e, ofs) == sizeof e) {
+    e.in_use = false;
+    inode_write_at(dir->inode, &e, sizeof e, ofs);
+    ofs += sizeof e;
+  }
+}
+
 /* Adds a file named NAME to DIR, which must not already contain a
    file by that name.  The file's inode is in sector
    INODE_SECTOR.
@@ -113,6 +127,10 @@ bool dir_add(struct dir* dir, const char* name, block_sector_t inode_sector, boo
 
   /* Check NAME for validity. */
   if (*name == '\0' || strlen(name) > NAME_MAX)
+    return false;
+
+  /* Cannot add to a removed directory. */
+  if(dir->inode->removed)
     return false;
 
   /* Check that NAME is not in use. */
@@ -162,9 +180,6 @@ bool dir_remove(struct dir* dir, const char* name) {
   if (inode == NULL)
     goto done;
 
-  /* Ignore delete if inode is in use. */
-  if(inode->open_cnt > 1)
-    goto done;
 
   /* Erase directory entry. */
   e.in_use = false;

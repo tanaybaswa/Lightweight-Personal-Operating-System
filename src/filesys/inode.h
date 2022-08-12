@@ -61,7 +61,7 @@ void inode_deallocate(struct inode_disk* inode, size_t start, size_t stop);
 /* Buffer cache definitions/structs. */
 
 #define MAX_BUFFERS_CACHED 64
-//#define NO_BUFFER
+#define NO_BUFFER
 
 struct buffer_cache {
   struct lock lock;

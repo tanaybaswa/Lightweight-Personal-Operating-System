@@ -179,6 +179,7 @@ bool filesys_remove_dir(const char* name, const struct dir* dir_) {
     return false;
   }
 
+  dir_clear(child);
   dir_close(child);
   bool success = dir_remove(dir, name);
   dir_close(dir);

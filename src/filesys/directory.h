@@ -42,6 +42,7 @@ bool dir_lookup(const struct dir*, const char* name, struct inode**, bool* is_di
 bool dir_add(struct dir*, const char* name, block_sector_t, bool is_dir);
 bool dir_remove(struct dir*, const char* name);
 bool dir_readdir(struct dir*, char name[NAME_MAX + 1]);
+void dir_clear(struct dir*);
 
 /* Splitting file path into parts. */
 int get_next_part(char part[NAME_MAX + 1], const char** srcp);
