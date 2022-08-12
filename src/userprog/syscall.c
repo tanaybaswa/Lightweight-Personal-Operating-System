@@ -59,8 +59,8 @@ static void syscall_handler(struct intr_frame* f) {
 
       {1, (syscall_function*)sys_chdir},
       {1, (syscall_function*)sys_mkdir},
-      {1, NULL},
-      {1, NULL},
+      {2, (syscall_function*)sys_readdir},
+      {1, (syscall_function*)sys_isdir},
       {1, (syscall_function*)sys_inumber},
   };
 
@@ -159,9 +159,12 @@ static char* copy_in_string(const char* us) {
 /* inode system call. */
 int sys_inumber(int handle) {
   struct file_descriptor* fd = lookup_fd(handle);
-  struct file* file = fd->file;
-  struct inode* inode = file_get_inode(file);
-  return inode->sector;
+
+  if(fd->is_directory) {
+    return dir_get_inode(fd->dir)->sector;
+  } else {
+    return dir_get_inode(fd->file)->sector;
+  }
 }
 
 bool sys_chdir(const char* udir) {
@@ -375,10 +378,17 @@ int sys_remove(const char* ufile) {
   lock_acquire(&fs_lock);
 
   struct dir* cwd;
-  if(kfile[0] == '/')
+  if(kfile[0] == '/') {
+    if(strlen(kfile) == 1) {
+      /* Cannot remove the root directory. */
+      palloc_free_page(kfile);
+      lock_release(&fs_lock);
+      return ok;
+    }
     cwd = dir_open_root();
-  else
+  } else {
     cwd = dir_reopen(thread_current()->pcb->cwd);
+  }
 
 
   char path_part[NAME_MAX + 1];
@@ -486,6 +496,26 @@ int sys_open(const char* ufile) {
 
   palloc_free_page(kfile_copy);
   return handle;
+}
+
+bool sys_isdir(int handle) {
+  struct file_descriptor* fd = lookup_fd(handle);
+  return fd->is_directory;
+}
+
+bool sys_readdir(int handle, char* udst_) {
+  char* udst = udst_;
+  struct file_descriptor* fd = lookup_fd(handle);
+
+  if(!fd->is_directory)
+    return false;
+
+  for(int i = 0; i < READDIR_MAX_LEN + 1; i++) {
+    if(!verify_user(udst + i))
+      process_exit();
+  }
+
+  return dir_readdir(fd->dir, udst);
 }
 
 /* Returns the file descriptor associated with the given handle.
@@ -653,7 +683,13 @@ int sys_tell(int handle) {
 /* Close system call. */
 int sys_close(int handle) {
   struct file_descriptor* fd = lookup_fd(handle);
-  safe_file_close(fd->file);
+
+  if(fd->is_directory) {
+    dir_close(fd->dir);
+  } else {
+    safe_file_close(fd->file);
+  }
+
   list_remove(&fd->elem);
   free(fd);
   return 0;

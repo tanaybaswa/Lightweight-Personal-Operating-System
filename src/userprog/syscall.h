@@ -4,6 +4,8 @@
 #include "threads/thread.h"
 #include "userprog/process.h"
 
+#define READDIR_MAX_LEN 14
+
 int sys_halt(void);
 int sys_exit(int status);
 int sys_exec(const char* ufile);
@@ -21,9 +23,11 @@ int sys_practice(int input);
 int sys_compute_e(int n);
 
 /* File system syscalls. */
-int sys_inumber(int fd);
+int sys_inumber(int handle);
 bool sys_chdir(const char* dir);
 bool sys_mkdir(const char* dir);
+bool sys_readdir(int handle, char* ufile);
+bool sys_isdir(int handle);
 
 void syscall_init(void);
 void safe_file_close(struct file* file);

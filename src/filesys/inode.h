@@ -13,7 +13,7 @@
 
 /* Number of direct pointers in an inode. (Subject to change to 
    to accomodate metadata.) */
-#define NUM_DIRECT 122
+#define NUM_DIRECT 124
 
 /* Number of pointers in an indirect inode. */
 #define NUM_INDIRECT 128
@@ -28,8 +28,8 @@ struct inode_disk {
   block_sector_t double_indirect;    /* Double pointer */
   off_t length;                      /* File size in bytes. */
   unsigned magic;                    /* Magic number. */
-  bool is_dir;                       /* Determines whether inode is a directory or file */
-  struct dir_entry* dir_entry;       /* Pointer to inode's dir_entry; NULL if inode is a file */
+  //bool is_dir;                       /* Determines whether inode is a directory or file */
+  //struct dir_entry* dir_entry;       /* Pointer to inode's dir_entry; NULL if inode is a file */
 };
 
 /* In-memory inode. */
@@ -39,7 +39,7 @@ struct inode {
   int open_cnt;           /* Number of openers. */
   bool removed;           /* True if deleted, false otherwise. */
   int deny_write_cnt;     /* 0: writes ok, >0: deny writes. */
-  struct lock inode_lock; /* Inode Lock. */
+  struct lock lock; /* Inode Lock. */
 };
 
 void inode_init(void);
@@ -57,8 +57,6 @@ off_t inode_length(const struct inode*);
 struct inode_disk* get_disk_inode(const struct inode* inode);
 size_t inode_allocate(struct inode_disk* inode, size_t start, size_t stop);
 void inode_deallocate(struct inode_disk* inode, size_t start, size_t stop);
-void inode_lock_acquire(struct inode* inode);
-void inode_lock_release(struct inode* inode);
 
 /* Buffer cache definitions/structs. */
 
