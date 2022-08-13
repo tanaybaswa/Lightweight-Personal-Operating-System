@@ -64,11 +64,11 @@ static bool lookup(const struct dir* dir, const char* name, struct dir_entry* ep
   ASSERT(dir != NULL);
   ASSERT(name != NULL);
 
-  while(inode_read_at(dir->inode, &e, sizeof e, ofs) == sizeof e) {
-    if(e.in_use && !strcmp(name, e.name)) {
-      if(ep != NULL)
+  while (inode_read_at(dir->inode, &e, sizeof e, ofs) == sizeof e) {
+    if (e.in_use && !strcmp(name, e.name)) {
+      if (ep != NULL)
         *ep = e;
-      if(ofsp != NULL)
+      if (ofsp != NULL)
         *ofsp = ofs;
       return true;
     }
@@ -104,7 +104,7 @@ void dir_clear(struct dir* dir) {
 
   ASSERT(dir != NULL);
 
-  while(inode_read_at(dir->inode, &e, sizeof e, ofs) == sizeof e) {
+  while (inode_read_at(dir->inode, &e, sizeof e, ofs) == sizeof e) {
     e.in_use = false;
     inode_write_at(dir->inode, &e, sizeof e, ofs);
     ofs += sizeof e;
@@ -130,7 +130,7 @@ bool dir_add(struct dir* dir, const char* name, block_sector_t inode_sector, boo
     return false;
 
   /* Cannot add to a removed directory. */
-  if(dir->inode->removed)
+  if (dir->inode->removed)
     return false;
 
   /* Check that NAME is not in use. */
@@ -180,7 +180,6 @@ bool dir_remove(struct dir* dir, const char* name) {
   if (inode == NULL)
     goto done;
 
-
   /* Erase directory entry. */
   e.in_use = false;
   if (inode_write_at(dir->inode, &e, sizeof e, ofs) != sizeof e)
@@ -198,13 +197,13 @@ done:
 bool dir_empty(struct dir* dir) {
   struct dir_entry e;
   off_t ofs = 0;
-  while(inode_read_at(dir->inode, &e, sizeof e, ofs) == sizeof e) {
-    if(strcmp(".", e.name) == 0 || strcmp("..", e.name) == 0) {
+  while (inode_read_at(dir->inode, &e, sizeof e, ofs) == sizeof e) {
+    if (strcmp(".", e.name) == 0 || strcmp("..", e.name) == 0) {
       ofs += sizeof e;
       continue;
     }
 
-    if(e.in_use)
+    if (e.in_use)
       return false;
 
     ofs += sizeof e;
@@ -220,7 +219,7 @@ bool dir_readdir(struct dir* dir, char name[NAME_MAX + 1]) {
 
   while (inode_read_at(dir->inode, &e, sizeof e, dir->pos) == sizeof e) {
     dir->pos += sizeof e;
-    if(e.in_use && (strcmp(e.name, ".") == 0 || strcmp(e.name, "..") == 0))
+    if (e.in_use && (strcmp(e.name, ".") == 0 || strcmp(e.name, "..") == 0))
       continue;
 
     if (e.in_use) {
@@ -236,14 +235,14 @@ int get_next_part(char part[NAME_MAX + 1], const char** srcp) {
   char* dst = part;
 
   /* Skip leading slashes. If it's all slashes, we're done. */
-  while(*src == '/')
+  while (*src == '/')
     src++;
-  if(*src == '\0')
+  if (*src == '\0')
     return 0;
 
   /* Copy up to NAME_MAX character from SRC to DST. Add null terminator. */
-  while(*src != '/' && *src != '\0') {
-    if(dst < part + NAME_MAX)
+  while (*src != '/' && *src != '\0') {
+    if (dst < part + NAME_MAX)
       *dst++ = *src;
     else
       return -1;

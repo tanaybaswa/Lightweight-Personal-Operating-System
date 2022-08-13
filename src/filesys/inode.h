@@ -34,12 +34,12 @@ struct inode_disk {
 
 /* In-memory inode. */
 struct inode {
-  struct list_elem elem;  /* Element in inode list. */
-  block_sector_t sector;  /* Sector number of disk location. */
-  int open_cnt;           /* Number of openers. */
-  bool removed;           /* True if deleted, false otherwise. */
-  int deny_write_cnt;     /* 0: writes ok, >0: deny writes. */
-  struct lock lock; /* Inode Lock. */
+  struct list_elem elem; /* Element in inode list. */
+  block_sector_t sector; /* Sector number of disk location. */
+  int open_cnt;          /* Number of openers. */
+  bool removed;          /* True if deleted, false otherwise. */
+  int deny_write_cnt;    /* 0: writes ok, >0: deny writes. */
+  struct lock lock;      /* Inode Lock. */
 };
 
 void inode_init(void);
@@ -94,7 +94,5 @@ struct buffer_block* buffer_cache_get(block_sector_t id);
 void buffer_cache_read(block_sector_t, void*, size_t, size_t, size_t);
 void buffer_cache_write(block_sector_t, const void*, size_t, size_t, size_t);
 double buffer_cache_hit_rate(void);
-
-
 
 #endif /* filesys/inode.h */

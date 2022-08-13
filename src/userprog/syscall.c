@@ -18,15 +18,11 @@
 #include "userprog/process.h"
 #include "userprog/pagedir.h"
 
-
 static void syscall_handler(struct intr_frame*);
 static void copy_in(void*, const void*, size_t);
 static struct file_descriptor* lookup_fd(int handle);
 
-
-void syscall_init(void) {
-  intr_register_int(0x30, 3, INTR_ON, syscall_handler, "syscall");
-}
+void syscall_init(void) { intr_register_int(0x30, 3, INTR_ON, syscall_handler, "syscall"); }
 
 /* System call handler. */
 static void syscall_handler(struct intr_frame* f) {
@@ -40,30 +36,19 @@ static void syscall_handler(struct intr_frame* f) {
 
   /* Table of system calls. */
   static const struct syscall syscall_table[] = {
-      {0, (syscall_function*)sys_halt},
-      {1, (syscall_function*)sys_exit},
-      {1, (syscall_function*)sys_exec},
-      {1, (syscall_function*)sys_wait},
-      {2, (syscall_function*)sys_create},
-      {1, (syscall_function*)sys_remove},
-      {1, (syscall_function*)sys_open},
-      {1, (syscall_function*)sys_filesize},
-      {3, (syscall_function*)sys_read},
-      {3, (syscall_function*)sys_write},
-      {2, (syscall_function*)sys_seek},
-      {1, (syscall_function*)sys_tell},
-      {1, (syscall_function*)sys_close},
-      {1, (syscall_function*)sys_practice},
+      {0, (syscall_function*)sys_halt},        {1, (syscall_function*)sys_exit},
+      {1, (syscall_function*)sys_exec},        {1, (syscall_function*)sys_wait},
+      {2, (syscall_function*)sys_create},      {1, (syscall_function*)sys_remove},
+      {1, (syscall_function*)sys_open},        {1, (syscall_function*)sys_filesize},
+      {3, (syscall_function*)sys_read},        {3, (syscall_function*)sys_write},
+      {2, (syscall_function*)sys_seek},        {1, (syscall_function*)sys_tell},
+      {1, (syscall_function*)sys_close},       {1, (syscall_function*)sys_practice},
       {1, (syscall_function*)sys_compute_e},
 
-      {1, (syscall_function*)sys_chdir},
-      {1, (syscall_function*)sys_mkdir},
-      {2, (syscall_function*)sys_readdir},
-      {1, (syscall_function*)sys_isdir},
-      {1, (syscall_function*)sys_inumber},
-      {0, (syscall_function*)sys_hit_rate},
-      {0, (syscall_function*)sys_flush_cache},
-      {0, (syscall_function*)sys_read_count},
+      {1, (syscall_function*)sys_chdir},       {1, (syscall_function*)sys_mkdir},
+      {2, (syscall_function*)sys_readdir},     {1, (syscall_function*)sys_isdir},
+      {1, (syscall_function*)sys_inumber},     {0, (syscall_function*)sys_hit_rate},
+      {0, (syscall_function*)sys_flush_cache}, {0, (syscall_function*)sys_read_count},
       {0, (syscall_function*)sys_write_count},
   };
 
@@ -91,9 +76,7 @@ static void syscall_handler(struct intr_frame* f) {
 }
 
 /* Closes a file safely */
-void safe_file_close(struct file* file) {
-  file_close(file);
-}
+void safe_file_close(struct file* file) { file_close(file); }
 
 /* Returns true if UADDR is a valid, mapped user address,
    false otherwise. */
@@ -157,27 +140,19 @@ static char* copy_in_string(const char* us) {
   return ks;
 }
 
-double sys_hit_rate() {
-  return buffer_cache_hit_rate();
-}
+double sys_hit_rate() { return buffer_cache_hit_rate(); }
 
-void sys_flush_cache() {
-  buffer_cache_flush();
-}
+void sys_flush_cache() { buffer_cache_flush(); }
 
-int sys_read_count() {
-  return block_get_reads(fs_device);
-}
+int sys_read_count() { return block_get_reads(fs_device); }
 
-int sys_write_count() {
-  return block_get_writes(fs_device);
-}
+int sys_write_count() { return block_get_writes(fs_device); }
 
 /* inode system call. */
 int sys_inumber(int handle) {
   struct file_descriptor* fd = lookup_fd(handle);
 
-  if(fd->is_directory) {
+  if (fd->is_directory) {
     return dir_get_inode(fd->dir)->sector;
   } else {
     return dir_get_inode(fd->file)->sector;
@@ -197,19 +172,19 @@ bool sys_chdir(const char* udir) {
    */
 
   size_t len = strlen(kdir);
-  if(len == 0) {
+  if (len == 0) {
     palloc_free_page(kdir);
     return ok;
   }
 
   struct dir* cwd;
-  if(kdir[0] == '/') {
+  if (kdir[0] == '/') {
     cwd = dir_open_root();
   } else {
     cwd = dir_reopen(thread_current()->pcb->cwd);
   }
 
-  if(cwd == NULL) {
+  if (cwd == NULL) {
     palloc_free_page(kdir);
     return ok;
   }
@@ -217,14 +192,14 @@ bool sys_chdir(const char* udir) {
   char path_part[NAME_MAX + 1];
   int result;
   bool not_found = false;
-  while((result = get_next_part(path_part, &kdir)) == 1) {
+  while ((result = get_next_part(path_part, &kdir)) == 1) {
     /* Search the cwd for the dir_entry with PATH_PART name. */
     /* NOTE: If user put a file in a non-terminating position,
      * this has unknown behavior. */
     struct inode* dir_inode;
     bool is_dir;
     bool found = dir_lookup(cwd, path_part, &dir_inode, &is_dir);
-    if(found && is_dir) {
+    if (found && is_dir) {
       dir_close(cwd);
       cwd = dir_open(dir_inode);
     } else {
@@ -234,21 +209,21 @@ bool sys_chdir(const char* udir) {
   }
 
   ok = !not_found && result != -1;
-  if(ok) {
+  if (ok) {
     /* Change directory. */
     dir_close(thread_current()->pcb->cwd);
     thread_current()->pcb->cwd = cwd;
   } else {
     dir_close(cwd);
   }
-  
+
   palloc_free_page(kdir_copy);
   return ok;
 }
 
 /* Returns whether the path is empty AKA the last. */
 static bool is_last(const char* path) {
-  while(*path == '/') {
+  while (*path == '/') {
     path++;
   }
 
@@ -261,20 +236,20 @@ bool sys_mkdir(const char* udir) {
   bool ok = false;
 
   int len = strlen(kdir);
-  if(len == 0) {
+  if (len == 0) {
     palloc_free_page(kdir);
     return ok;
   }
 
   struct dir* cwd;
 
-  if(kdir[0] == '/') {
+  if (kdir[0] == '/') {
     cwd = dir_open_root();
   } else {
     cwd = dir_reopen(thread_current()->pcb->cwd);
   }
 
-  if(cwd == NULL) {
+  if (cwd == NULL) {
     palloc_free_page(kdir);
     return ok;
   }
@@ -282,19 +257,19 @@ bool sys_mkdir(const char* udir) {
   int result;
   char path_part[NAME_MAX + 1];
   // "a/b/c"
-  while((result = get_next_part(path_part, &kdir)) == 1) {
+  while ((result = get_next_part(path_part, &kdir)) == 1) {
     struct inode* dir_inode;
     bool is_dir;
     bool found = dir_lookup(cwd, path_part, &dir_inode, &is_dir);
-    if(is_last(kdir)) {
+    if (is_last(kdir)) {
       /* Make sure PATH_PART doesn't exist. */
-      if(!found)
+      if (!found)
         ok = filesys_create_dir(path_part, cwd);
       else
         inode_close(dir_inode);
     } else {
       /* Make sure PATH_PART does exist. */
-      if(found && is_dir) {
+      if (found && is_dir) {
         dir_close(cwd);
         cwd = dir_open(dir_inode);
       } else {
@@ -324,7 +299,7 @@ int sys_exec(const char* ufile) {
   char* kfile = copy_in_string(ufile);
   char* kfile_copy = kfile;
 
-  if(strlen(kfile) == 0) {
+  if (strlen(kfile) == 0) {
     palloc_free_page(kfile);
     return -1;
   }
@@ -332,17 +307,16 @@ int sys_exec(const char* ufile) {
   /* Split the exec string into two parts:
    * The path and the arguments.
    */
-  char* exec_path, *args;
+  char *exec_path, *args;
   exec_path = strtok_r(kfile, " ", &args);
 
-
   struct dir* cwd;
-  if(exec_path[0] == '/')
+  if (exec_path[0] == '/')
     cwd = dir_open_root();
   else
     cwd = dir_reopen(thread_current()->pcb->cwd);
 
-  if(cwd == NULL) {
+  if (cwd == NULL) {
     palloc_free_page(kfile_copy);
     return -1;
   }
@@ -351,22 +325,22 @@ int sys_exec(const char* ufile) {
   int result;
   bool valid = false;
 
-  while((result = get_next_part(path_part, &exec_path)) == 1) {
+  while ((result = get_next_part(path_part, &exec_path)) == 1) {
     struct inode* inode;
     bool is_dir;
     bool found = dir_lookup(cwd, path_part, &inode, &is_dir);
     bool last = is_last(exec_path);
 
-    if(last) {
+    if (last) {
 
       /* Make sure exe exists. */
-      if(!found || is_dir)
+      if (!found || is_dir)
         break;
 
       valid = true;
       inode_close(inode);
     } else {
-      if(!found || !is_dir)
+      if (!found || !is_dir)
         break;
 
       dir_close(cwd);
@@ -376,10 +350,10 @@ int sys_exec(const char* ufile) {
 
   dir_close(cwd);
 
-  if(valid) {
+  if (valid) {
     int args_len = strlen(args);
     int exec_len = strlen(path_part);
-    if(args_len > 0) {
+    if (args_len > 0) {
       char args_formatted[args_len + exec_len + 2];
       memcpy(args_formatted, path_part, exec_len);
       args_formatted[exec_len] = ' ';
@@ -407,27 +381,27 @@ int sys_create(const char* ufile, unsigned initial_size) {
   char* kfile_copy = kfile;
   bool ok = false;
 
-  if(strlen(kfile) == 0) {
+  if (strlen(kfile) == 0) {
     palloc_free_page(kfile);
     return ok;
   }
 
   struct dir* cwd;
-  if(kfile[0] == '/')
+  if (kfile[0] == '/')
     cwd = dir_open_root();
   else
     cwd = dir_reopen(thread_current()->pcb->cwd);
 
   char path_part[NAME_MAX + 1];
   int result;
-  while((result = get_next_part(path_part, &kfile)) == 1) {
+  while ((result = get_next_part(path_part, &kfile)) == 1) {
     struct inode* file_inode;
     bool is_dir;
     bool found = dir_lookup(cwd, path_part, &file_inode, &is_dir);
 
-    if(is_last(kfile)) {
+    if (is_last(kfile)) {
       /* Create the file in CWD. */
-      if(found) {
+      if (found) {
         inode_close(file_inode);
         break;
       }
@@ -435,10 +409,10 @@ int sys_create(const char* ufile, unsigned initial_size) {
       ok = filesys_create_file(path_part, cwd, initial_size);
     } else {
       /* Navigate to next dir. */
-      if(!found)
+      if (!found)
         break;
 
-      if(!is_dir)
+      if (!is_dir)
         break;
 
       dir_close(cwd);
@@ -457,14 +431,14 @@ int sys_remove(const char* ufile) {
   char* kfile_copy = kfile;
   bool ok = false;
 
-  if(strlen(kfile) == 0) {
+  if (strlen(kfile) == 0) {
     palloc_free_page(kfile);
     return ok;
   }
 
   struct dir* cwd;
-  if(kfile[0] == '/') {
-    if(strlen(kfile) == 1) {
+  if (kfile[0] == '/') {
+    if (strlen(kfile) == 1) {
       /* Cannot remove the root directory. */
       palloc_free_page(kfile);
       return ok;
@@ -474,26 +448,25 @@ int sys_remove(const char* ufile) {
     cwd = dir_reopen(thread_current()->pcb->cwd);
   }
 
-
   char path_part[NAME_MAX + 1];
   int result;
 
-  while((result = get_next_part(path_part, &kfile)) == 1) {
+  while ((result = get_next_part(path_part, &kfile)) == 1) {
     struct inode* inode;
     bool is_dir;
     bool found = dir_lookup(cwd, path_part, &inode, &is_dir);
 
-    if(!found)
+    if (!found)
       break;
 
-    if(is_last(kfile)) {
+    if (is_last(kfile)) {
       inode_close(inode);
-      if(is_dir)
+      if (is_dir)
         ok = filesys_remove_dir(path_part, cwd);
       else
         ok = filesys_remove_file(path_part, cwd);
     } else {
-      if(!is_dir)
+      if (!is_dir)
         break;
 
       dir_close(cwd);
@@ -514,7 +487,7 @@ int sys_open(const char* ufile) {
   int handle = -1;
 
   int len = strlen(kfile);
-  if(len == 0) {
+  if (len == 0) {
     palloc_free_page(kfile);
     return handle;
   }
@@ -522,13 +495,12 @@ int sys_open(const char* ufile) {
   fd = malloc(sizeof *fd);
   if (fd != NULL) {
 
-
     struct dir* cwd;
-    if(kfile[0] == '/') {
-      if(len == 1) {
+    if (kfile[0] == '/') {
+      if (len == 1) {
         fd->is_directory = true;
         fd->dir = dir_open_root();
-        if(fd->dir == NULL) {
+        if (fd->dir == NULL) {
           free(fd);
         } else {
           handle = fd->handle = thread_current()->pcb->next_handle++;
@@ -537,7 +509,6 @@ int sys_open(const char* ufile) {
 
         palloc_free_page(kfile);
         return handle;
-
       }
       cwd = dir_open_root();
     } else {
@@ -546,13 +517,13 @@ int sys_open(const char* ufile) {
 
     char path_part[NAME_MAX + 1];
     int result;
-    while((result = get_next_part(path_part, &kfile)) == 1) {
+    while ((result = get_next_part(path_part, &kfile)) == 1) {
       struct inode* file_inode;
       bool is_dir;
       bool found = dir_lookup(cwd, path_part, &file_inode, &is_dir);
 
-      if(is_last(kfile)) {
-        if(!found) {
+      if (is_last(kfile)) {
+        if (!found) {
           free(fd);
           break;
         }
@@ -560,7 +531,7 @@ int sys_open(const char* ufile) {
         inode_close(file_inode);
         bool success = false;
         fd->is_directory = is_dir;
-        if(is_dir) {
+        if (is_dir) {
           fd->dir = filesys_open_dir(path_part, cwd);
           success = fd->dir != NULL;
         } else {
@@ -568,7 +539,7 @@ int sys_open(const char* ufile) {
           success = fd->file != NULL;
         }
 
-        if(success) {
+        if (success) {
           struct thread* cur = thread_current();
           handle = fd->handle = cur->pcb->next_handle++;
           list_push_front(&cur->pcb->fds, &fd->elem);
@@ -578,7 +549,7 @@ int sys_open(const char* ufile) {
 
       } else {
         /* Continue searching in next dir. */
-        if(!found) {
+        if (!found) {
           free(fd);
           break;
         }
@@ -604,11 +575,11 @@ bool sys_readdir(int handle, char* udst_) {
   char* udst = udst_;
   struct file_descriptor* fd = lookup_fd(handle);
 
-  if(!fd->is_directory)
+  if (!fd->is_directory)
     return false;
 
-  for(int i = 0; i < READDIR_MAX_LEN + 1; i++) {
-    if(!verify_user(udst + i))
+  for (int i = 0; i < READDIR_MAX_LEN + 1; i++) {
+    if (!verify_user(udst + i))
       process_exit();
   }
 
@@ -660,7 +631,7 @@ int sys_read(int handle, void* udst_, unsigned size) {
   /* Handle all other reads. */
   fd = lookup_fd(handle);
 
-  if(fd->is_directory)
+  if (fd->is_directory)
     process_exit();
 
   while (size > 0) {
@@ -704,7 +675,7 @@ int sys_write(int handle, void* usrc_, unsigned size) {
   /* Lookup up file descriptor. */
   if (handle != STDOUT_FILENO) {
     fd = lookup_fd(handle);
-    if(fd->is_directory) {
+    if (fd->is_directory) {
       process_exit();
     }
   }
@@ -769,7 +740,7 @@ int sys_tell(int handle) {
 int sys_close(int handle) {
   struct file_descriptor* fd = lookup_fd(handle);
 
-  if(fd->is_directory) {
+  if (fd->is_directory) {
     dir_close(fd->dir);
   } else {
     safe_file_close(fd->file);

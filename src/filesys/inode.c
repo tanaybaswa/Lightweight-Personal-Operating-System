@@ -12,7 +12,6 @@
 /* Identifies an inode. */
 #define INODE_MAGIC 0x494e4f44
 
-
 struct indirect_inode {
   block_sector_t ptrs[NUM_INDIRECT]; /* (In)Direct Pointer array. */
 };
@@ -573,15 +572,16 @@ off_t inode_read_at(struct inode* inode, void* buffer_, off_t size, off_t offset
 #endif
     } else {
 #ifdef NO_BUFFER
-      if(bounce == NULL) {
+      if (bounce == NULL) {
         bounce = malloc(BLOCK_SECTOR_SIZE);
-        if(bounce == NULL) break;
+        if (bounce == NULL)
+          break;
       }
 
       block_read(fs_device, sector_idx, bounce);
       memcpy(buffer + bytes_read, bounce + sector_ofs, chunk_size);
 #endif
-      
+
 #ifndef NO_BUFFER
       buffer_cache_read(sector_idx, buffer, chunk_size, sector_ofs, bytes_read);
 #endif
@@ -672,7 +672,6 @@ off_t inode_write_at(struct inode* inode, const void* buffer_, off_t size, off_t
       block_write(fs_device, sector_idx, buffer + bytes_written);
 #endif
 
-
 #ifndef NO_BUFFER
       buffer_cache_write(sector_idx, buffer, chunk_size, sector_ofs, bytes_written);
 #endif
@@ -702,9 +701,7 @@ off_t inode_write_at(struct inode* inode, const void* buffer_, off_t size, off_t
 #ifndef NO_BUFFER
       buffer_cache_write(sector_idx, buffer, chunk_size, sector_ofs, bytes_written);
 #endif
-
     }
-
 
     /* Advance. */
     size -= chunk_size;
@@ -784,10 +781,11 @@ static bool buffer_cache_less_func(const struct hash_elem* a, const struct hash_
   return block_a->id < block_b->id;
 }
 
-void buffer_cache_read(block_sector_t sector_id, void* read_buffer_, size_t size, size_t block_buffer_offset, size_t read_buffer_offset) {
+void buffer_cache_read(block_sector_t sector_id, void* read_buffer_, size_t size,
+                       size_t block_buffer_offset, size_t read_buffer_offset) {
   lock_acquire(&buffer_cache.lock);
   struct buffer_block* bb = buffer_cache_get(sector_id);
-  if(sector_id + 1 < block_size(fs_device))
+  if (sector_id + 1 < block_size(fs_device))
     buffer_cache_get(sector_id + 1);
   lock_release(&buffer_cache.lock);
 
@@ -798,10 +796,11 @@ void buffer_cache_read(block_sector_t sector_id, void* read_buffer_, size_t size
   return;
 }
 
-void buffer_cache_write(block_sector_t sector_id, const void* write_buffer_, size_t size, size_t block_buffer_offset, size_t write_buffer_offset) {
+void buffer_cache_write(block_sector_t sector_id, const void* write_buffer_, size_t size,
+                        size_t block_buffer_offset, size_t write_buffer_offset) {
   lock_acquire(&buffer_cache.lock);
   struct buffer_block* bb = buffer_cache_get(sector_id);
-  if(sector_id + 1 < block_size(fs_device))
+  if (sector_id + 1 < block_size(fs_device))
     buffer_cache_get(sector_id + 1);
   lock_release(&buffer_cache.lock);
 
@@ -817,7 +816,7 @@ struct buffer_block* buffer_cache_get(block_sector_t id) {
   buffer_cache.total += 1;
 
   /* If requesting a block that is being fetched, wait. */
-  while(buffer_cache.fetching_id == id && buffer_cache.is_fetching) {
+  while (buffer_cache.fetching_id == id && buffer_cache.is_fetching) {
     cond_wait(&buffer_cache.fetching, &buffer_cache.lock);
   }
 
@@ -827,7 +826,7 @@ struct buffer_block* buffer_cache_get(block_sector_t id) {
 
   /* Search for ID in the buffer cache's map. */
   struct hash_elem* buffer_block_helem = hash_find(&buffer_cache.map, &search_key.helem);
-  if(buffer_block_helem == NULL) {
+  if (buffer_block_helem == NULL) {
     /* Bring the block into the buffer cache. */
     buffer_cache.misses += 1;
     buffer_block_helem = buffer_cache_fetch(id);
@@ -843,10 +842,9 @@ struct buffer_block* buffer_cache_get(block_sector_t id) {
 
 static struct hash_elem* buffer_cache_fetch(block_sector_t id) {
   /* Wait for buffer cache to finish fetching block. */
-  while((buffer_cache.is_writing && buffer_cache.writing_id == id) || buffer_cache.is_fetching) {
+  while ((buffer_cache.is_writing && buffer_cache.writing_id == id) || buffer_cache.is_fetching) {
     cond_wait(&buffer_cache.fetching, &buffer_cache.lock);
   }
-
 
   /* Prevents buffer cache from fetching same block or fetching at same time. */
   buffer_cache.is_fetching = true;
@@ -876,7 +874,6 @@ static struct hash_elem* buffer_cache_fetch(block_sector_t id) {
   if (list_size(&buffer_cache.lru) >= MAX_BUFFERS_CACHED) {
     buffer_cache_lru_evict();
   }
-  
 
   list_push_front(&buffer_cache.lru, &buffer_block->lelem);
 
@@ -907,7 +904,7 @@ static void buffer_cache_lru_evict() {
 
   // printf("Evicting block %d.\n", buffer_block->id);
   lock_acquire(&buffer_block->lock);
-  if(buffer_block->dirty) {
+  if (buffer_block->dirty) {
     buffer_cache.is_writing = true;
     buffer_cache.writing_id = buffer_block->id;
 
@@ -926,15 +923,13 @@ static void buffer_cache_lru_evict() {
   return;
 }
 
-
-
 void buffer_cache_flush() {
   lock_acquire(&buffer_cache.lock);
 
-  while(!list_empty(&buffer_cache.lru)) {
-    struct list_elem *e = list_pop_front(&buffer_cache.lru);
+  while (!list_empty(&buffer_cache.lru)) {
+    struct list_elem* e = list_pop_front(&buffer_cache.lru);
     struct buffer_block* block = list_entry(e, struct buffer_block, lelem);
-    if(block->dirty) {
+    if (block->dirty) {
       block_write(fs_device, block->id, block->data);
     }
 
@@ -944,7 +939,6 @@ void buffer_cache_flush() {
   buffer_cache.total = 0;
   buffer_cache.misses = 0;
   lock_release(&buffer_cache.lock);
-
 }
 
 double buffer_cache_hit_rate() {
@@ -953,7 +947,7 @@ double buffer_cache_hit_rate() {
   size_t total = buffer_cache.total;
   lock_release(&buffer_cache.lock);
   double rate;
-  if(total > 0)
+  if (total > 0)
     rate = ((double)hits) / ((double)total);
   else
     rate = 0.0;

@@ -24,8 +24,7 @@
                  : [number] "i"(NUMBER)                                                            \
                  : "memory");                                                                      \
     retval;                                                                                        \
-   })
-
+  })
 
 /* Invokes syscall NUMBER, passing argument ARG0, and returns the
    return value as an `int'. */

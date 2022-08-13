@@ -32,7 +32,7 @@ void filesys_init(bool format) {
    to disk. */
 void filesys_done(void) {
   buffer_cache_flush();
-  free_map_close(); 
+  free_map_close();
 }
 
 /* Creates a file named NAME with the given INITIAL_SIZE.
@@ -42,8 +42,9 @@ void filesys_done(void) {
 bool filesys_create(const char* name, off_t initial_size) {
   block_sector_t inode_sector = 0;
   struct dir* dir = dir_open_root();
-  bool success = (dir != NULL && free_map_allocate(1, &inode_sector) &&
-                  inode_create(inode_sector, initial_size) && dir_add(dir, name, inode_sector, false));
+  bool success =
+      (dir != NULL && free_map_allocate(1, &inode_sector) &&
+       inode_create(inode_sector, initial_size) && dir_add(dir, name, inode_sector, false));
   if (!success && inode_sector != 0)
     free_map_release(inode_sector, 1);
   dir_close(dir);
@@ -54,9 +55,10 @@ bool filesys_create(const char* name, off_t initial_size) {
 bool filesys_create_file(const char* name, const struct dir* dir_, off_t initial_size) {
   block_sector_t inode_sector = 0;
   struct dir* dir = dir_reopen(dir_);
-  bool success = (dir != NULL & free_map_allocate(1, &inode_sector) &&
-      inode_create(inode_sector, initial_size) && dir_add(dir, name, inode_sector, false));
-  if(!success && inode_sector != 0)
+  bool success =
+      (dir != NULL & free_map_allocate(1, &inode_sector) &&
+       inode_create(inode_sector, initial_size) && dir_add(dir, name, inode_sector, false));
+  if (!success && inode_sector != 0)
     free_map_release(inode_sector, 1);
   dir_close(dir);
   return success;
@@ -68,20 +70,20 @@ bool filesys_create_dir(const char* name, const struct dir* dir_) {
   struct dir* dir = dir_reopen(dir_);
 
   bool success = (dir != NULL && free_map_allocate(1, &inode_sector) &&
-      inode_create(inode_sector, sizeof(struct dir_entry) * BASE_DIR_SIZE) && 
-      dir_add(dir, name, inode_sector, true));
+                  inode_create(inode_sector, sizeof(struct dir_entry) * BASE_DIR_SIZE) &&
+                  dir_add(dir, name, inode_sector, true));
 
-  if(!success && inode_sector != 0)
+  if (!success && inode_sector != 0)
     free_map_release(inode_sector, 1);
 
   /* Insert '.' and '..' */
-  if(success) {
+  if (success) {
     struct inode* child_inode = NULL;
     bool is_dir;
     struct dir* child_dir = NULL;
     dir_lookup(dir, name, &child_inode, &is_dir);
 
-    if(child_inode == NULL || (child_dir = dir_open(child_inode)) == NULL) {
+    if (child_inode == NULL || (child_dir = dir_open(child_inode)) == NULL) {
       dir_remove(dir, name);
       free_map_release(inode_sector, 1);
       dir_close(dir);
@@ -92,7 +94,6 @@ bool filesys_create_dir(const char* name, const struct dir* dir_) {
     dir_add(child_dir, "..", dir_get_inode(dir)->sector, true);
     dir_close(child_dir);
   }
-
 
   dir_close(dir);
   return success;
@@ -120,7 +121,7 @@ struct file* filesys_open_file(const char* name, const struct dir* dir_) {
   struct dir* dir = dir_reopen(dir_);
   struct inode* inode = NULL;
 
-  if(dir != NULL) {
+  if (dir != NULL) {
     bool is_dir;
     dir_lookup(dir, name, &inode, &is_dir);
   }
@@ -133,7 +134,7 @@ struct dir* filesys_open_dir(const char* name, const struct dir* parent_) {
   struct dir* parent = dir_reopen(parent_);
   struct inode* inode = NULL;
 
-  if(parent != NULL) {
+  if (parent != NULL) {
     bool is_dir;
     dir_lookup(parent, name, &inode, &is_dir);
   }
@@ -156,7 +157,7 @@ bool filesys_remove(const char* name) {
 
 bool filesys_remove_dir(const char* name, const struct dir* dir_) {
   struct dir* dir = dir_reopen(dir_);
-  if(dir == NULL)
+  if (dir == NULL)
     return false;
 
   struct inode* inode = NULL;
@@ -164,19 +165,19 @@ bool filesys_remove_dir(const char* name, const struct dir* dir_) {
   struct dir* child = NULL;
   bool found = dir_lookup(dir, name, &inode, &is_dir);
 
-  if(inode == NULL) {
+  if (inode == NULL) {
     dir_close(dir);
     return false;
   }
 
   child = dir_open(inode);
-  if(child == NULL) {
+  if (child == NULL) {
     dir_close(dir);
     inode_close(inode);
     return false;
   }
 
-  if(!dir_empty(child)) {
+  if (!dir_empty(child)) {
     dir_close(dir);
     dir_close(child);
     return false;
