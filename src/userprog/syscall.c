@@ -23,12 +23,9 @@ static void syscall_handler(struct intr_frame*);
 static void copy_in(void*, const void*, size_t);
 static struct file_descriptor* lookup_fd(int handle);
 
-/* Serializes file system operations. */
-static struct lock fs_lock;
 
 void syscall_init(void) {
   intr_register_int(0x30, 3, INTR_ON, syscall_handler, "syscall");
-  lock_init(&fs_lock);
 }
 
 /* System call handler. */
@@ -95,9 +92,7 @@ static void syscall_handler(struct intr_frame* f) {
 
 /* Closes a file safely */
 void safe_file_close(struct file* file) {
-  lock_acquire(&fs_lock);
   file_close(file);
-  lock_release(&fs_lock);
 }
 
 /* Returns true if UADDR is a valid, mapped user address,
@@ -207,7 +202,6 @@ bool sys_chdir(const char* udir) {
     return ok;
   }
 
-  lock_acquire(&fs_lock);
   struct dir* cwd;
   if(kdir[0] == '/') {
     cwd = dir_open_root();
@@ -217,7 +211,6 @@ bool sys_chdir(const char* udir) {
 
   if(cwd == NULL) {
     palloc_free_page(kdir);
-    lock_release(&fs_lock);
     return ok;
   }
 
@@ -249,7 +242,6 @@ bool sys_chdir(const char* udir) {
     dir_close(cwd);
   }
   
-  lock_release(&fs_lock);
   palloc_free_page(kdir_copy);
   return ok;
 }
@@ -274,7 +266,6 @@ bool sys_mkdir(const char* udir) {
     return ok;
   }
 
-  lock_acquire(&fs_lock);
   struct dir* cwd;
 
   if(kdir[0] == '/') {
@@ -285,7 +276,6 @@ bool sys_mkdir(const char* udir) {
 
   if(cwd == NULL) {
     palloc_free_page(kdir);
-    lock_release(&fs_lock);
     return ok;
   }
 
@@ -314,7 +304,6 @@ bool sys_mkdir(const char* udir) {
   }
 
   dir_close(cwd);
-  lock_release(&fs_lock);
   palloc_free_page(kdir_copy);
   return ok;
 }
@@ -346,17 +335,15 @@ int sys_exec(const char* ufile) {
   char* exec_path, *args;
   exec_path = strtok_r(kfile, " ", &args);
 
-  lock_acquire(&fs_lock);
 
   struct dir* cwd;
-  if(exec_path[0] == "/")
+  if(exec_path[0] == '/')
     cwd = dir_open_root();
   else
     cwd = dir_reopen(thread_current()->pcb->cwd);
 
   if(cwd == NULL) {
     palloc_free_page(kfile_copy);
-    lock_release(&fs_lock);
     return -1;
   }
 
@@ -407,7 +394,6 @@ int sys_exec(const char* ufile) {
     tid = -1;
   }
 
-  lock_release(&fs_lock);
   palloc_free_page(kfile_copy);
   return tid;
 }
@@ -426,7 +412,6 @@ int sys_create(const char* ufile, unsigned initial_size) {
     return ok;
   }
 
-  lock_acquire(&fs_lock);
   struct dir* cwd;
   if(kfile[0] == '/')
     cwd = dir_open_root();
@@ -462,7 +447,6 @@ int sys_create(const char* ufile, unsigned initial_size) {
   }
 
   dir_close(cwd);
-  lock_release(&fs_lock);
   palloc_free_page(kfile_copy);
   return ok;
 }
@@ -478,14 +462,11 @@ int sys_remove(const char* ufile) {
     return ok;
   }
 
-  lock_acquire(&fs_lock);
-
   struct dir* cwd;
   if(kfile[0] == '/') {
     if(strlen(kfile) == 1) {
       /* Cannot remove the root directory. */
       palloc_free_page(kfile);
-      lock_release(&fs_lock);
       return ok;
     }
     cwd = dir_open_root();
@@ -521,7 +502,6 @@ int sys_remove(const char* ufile) {
   }
 
   dir_close(cwd);
-  lock_release(&fs_lock);
   palloc_free_page(kfile_copy);
   return ok;
 }
@@ -541,7 +521,6 @@ int sys_open(const char* ufile) {
 
   fd = malloc(sizeof *fd);
   if (fd != NULL) {
-    lock_acquire(&fs_lock);
 
 
     struct dir* cwd;
@@ -557,7 +536,6 @@ int sys_open(const char* ufile) {
         }
 
         palloc_free_page(kfile);
-        lock_release(&fs_lock);
         return handle;
 
       }
@@ -611,7 +589,6 @@ int sys_open(const char* ufile) {
     }
 
     dir_close(cwd);
-    lock_release(&fs_lock);
   }
 
   palloc_free_page(kfile_copy);
@@ -661,9 +638,7 @@ int sys_filesize(int handle) {
   struct file_descriptor* fd = lookup_fd(handle);
   int size;
 
-  lock_acquire(&fs_lock);
   size = file_length(fd->file);
-  lock_release(&fs_lock);
 
   return size;
 }
@@ -688,7 +663,6 @@ int sys_read(int handle, void* udst_, unsigned size) {
   if(fd->is_directory)
     process_exit();
 
-  lock_acquire(&fs_lock);
   while (size > 0) {
     /* How much to read into this page? */
     size_t page_left = PGSIZE - pg_ofs(udst);
@@ -697,7 +671,6 @@ int sys_read(int handle, void* udst_, unsigned size) {
 
     /* Check that touching this page is okay. */
     if (!verify_user(udst)) {
-      lock_release(&fs_lock);
       process_exit();
     }
 
@@ -718,7 +691,6 @@ int sys_read(int handle, void* udst_, unsigned size) {
     udst += retval;
     size -= retval;
   }
-  lock_release(&fs_lock);
 
   return bytes_read;
 }
@@ -737,7 +709,6 @@ int sys_write(int handle, void* usrc_, unsigned size) {
     }
   }
 
-  lock_acquire(&fs_lock);
   while (size > 0) {
     /* How much bytes to write to this page? */
     size_t page_left = PGSIZE - pg_ofs(usrc);
@@ -746,7 +717,6 @@ int sys_write(int handle, void* usrc_, unsigned size) {
 
     /* Check that we can touch this user page. */
     if (!verify_user(usrc)) {
-      lock_release(&fs_lock);
       process_exit();
     }
 
@@ -771,7 +741,6 @@ int sys_write(int handle, void* usrc_, unsigned size) {
     usrc += retval;
     size -= retval;
   }
-  lock_release(&fs_lock);
 
   return bytes_written;
 }
@@ -780,10 +749,8 @@ int sys_write(int handle, void* usrc_, unsigned size) {
 int sys_seek(int handle, unsigned position) {
   struct file_descriptor* fd = lookup_fd(handle);
 
-  lock_acquire(&fs_lock);
   if ((off_t)position >= 0)
     file_seek(fd->file, position);
-  lock_release(&fs_lock);
 
   return 0;
 }
@@ -793,9 +760,7 @@ int sys_tell(int handle) {
   struct file_descriptor* fd = lookup_fd(handle);
   unsigned position;
 
-  lock_acquire(&fs_lock);
   position = file_tell(fd->file);
-  lock_release(&fs_lock);
 
   return position;
 }
